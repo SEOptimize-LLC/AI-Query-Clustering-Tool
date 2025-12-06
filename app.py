@@ -350,11 +350,24 @@ async def process_keywords(
     cache = CacheManager(supabase)
     job_manager = JobManager(supabase)
     
-    # Create job
-    job_id = job_manager.create_job(
-        total_keywords=len(keywords_data),
-        config=config
+    # Extract keyword strings
+    keywords_text = [kw["keyword"] for kw in keywords_data]
+    
+    # Create job with JobConfig
+    from core.job_manager import JobConfig
+    job_config = JobConfig(
+        location_code=LOCATION_CODES.get(config["location"], 2840),
+        location_name=config["location"],
+        language_code=LANGUAGE_CODES.get(config["language"], "en"),
+        outlier_similarity_threshold=config["similarity_threshold"],
+        llm_model=config.get("llm_model", "anthropic/claude-sonnet-4")
     )
+    
+    job = job_manager.create_job(
+        keywords=keywords_text,
+        config=job_config
+    )
+    job_id = job.id
     st.session_state.job_id = job_id
     
     # Progress tracker
@@ -369,8 +382,6 @@ async def process_keywords(
     try:
         # Stage 1: Fetch metrics
         update_progress("metrics", 0.0, "Fetching keyword metrics...")
-        
-        keywords_text = [kw["keyword"] for kw in keywords_data]
         
         # Check cache first
         cached_metrics = cache.get_cached_metrics(keywords_text)
