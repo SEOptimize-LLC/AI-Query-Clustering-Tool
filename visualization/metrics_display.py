@@ -342,7 +342,8 @@ def _display_gauge(
     )
     
     st.markdown(f"**{label}**")
-    st.progress(value / 100.0)
+    # Ensure native Python float for st.progress
+    st.progress(float(value / 100.0))
     st.markdown(f":{color}[{value:.1f}{suffix}]")
 
 
