@@ -236,63 +236,36 @@ def render_upload_section():
             f"with **{len(preview['columns'])}** columns"
         )
         
-        # Column selection UI
-        st.markdown("### Select Columns")
+        # Column selection UI - simplified to just keyword column
+        st.markdown("### Select Keyword Column")
         
-        col_a, col_b, col_c = st.columns(3)
+        kw_options = [""] + preview['columns']
+        default_kw = 0
+        if preview['detected_keyword_column']:
+            try:
+                default_kw = kw_options.index(
+                    preview['detected_keyword_column']
+                )
+            except ValueError:
+                default_kw = 0
         
-        with col_a:
-            kw_options = [""] + preview['columns']
-            default_kw = 0
-            if preview['detected_keyword_column']:
-                try:
-                    default_kw = kw_options.index(
-                        preview['detected_keyword_column']
-                    )
-                except ValueError:
-                    default_kw = 0
-            
-            keyword_col = st.selectbox(
-                "**Keyword Column** (required)",
-                options=kw_options,
-                index=default_kw,
-                help="Column containing keywords/search queries"
-            )
+        keyword_col = st.selectbox(
+            "**Keyword Column** (required)",
+            options=kw_options,
+            index=default_kw,
+            help="Column containing keywords/search queries"
+        )
         
-        with col_b:
-            vol_options = ["(none)"] + preview['columns']
-            default_vol = 0
-            if preview['detected_volume_column']:
-                try:
-                    default_vol = vol_options.index(
-                        preview['detected_volume_column']
-                    )
-                except ValueError:
-                    default_vol = 0
-            
-            volume_col = st.selectbox(
-                "Search Volume Column (optional)",
-                options=vol_options,
-                index=default_vol,
-                help="Will fetch from DataForSEO if not provided"
-            )
+        # Auto-detect volume/KD columns (use if found, skip if not)
+        volume_col = preview.get('detected_volume_column')
+        kd_col = preview.get('detected_kd_column')
         
-        with col_c:
-            kd_options = ["(none)"] + preview['columns']
-            default_kd = 0
-            if preview['detected_kd_column']:
-                try:
-                    default_kd = kd_options.index(
-                        preview['detected_kd_column']
-                    )
-                except ValueError:
-                    default_kd = 0
-            
-            kd_col = st.selectbox(
-                "Difficulty Column (optional)",
-                options=kd_options,
-                index=default_kd,
-                help="Will fetch from DataForSEO if not provided"
+        if volume_col or kd_col:
+            st.caption(
+                f"📊 Auto-detected: "
+                f"{f'Volume: {volume_col}' if volume_col else ''}"
+                f"{', ' if volume_col and kd_col else ''}"
+                f"{f'KD: {kd_col}' if kd_col else ''}"
             )
         
         # Show data preview
@@ -356,25 +329,12 @@ def render_validation_section():
     st.session_state.keywords_validated = unique
     
     # Show summary
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Keywords Ready", f"{len(unique):,}")
-    with col2:
-        has_vol = sum(
-            1 for kw in unique
-            if kw.get("search_volume", 0) > 0
-        )
-        st.metric("With Volume Data", f"{has_vol:,}")
-    with col3:
-        has_kd = sum(
-            1 for kw in unique
-            if kw.get("keyword_difficulty", 0) > 0
-        )
-        st.metric("With KD Data", f"{has_kd:,}")
+    st.success(f"✅ **{len(unique):,}** keywords ready for processing")
     
-    # Check if metrics already in file
-    if has_vol == len(unique):
-        st.success("✅ All keywords have search volume data from file")
+    # Check if file already had metrics (auto-detected columns)
+    has_vol = sum(1 for kw in unique if kw.get("search_volume", 0) > 0)
+    if has_vol == len(unique) and has_vol > 0:
+        st.info("📊 File already contains search volume data")
         st.session_state.keywords_enriched = unique
         st.session_state.metrics_fetched = True
     
