@@ -76,12 +76,13 @@ class LabelGenerator:
     - Action-oriented when appropriate
     """
     
-    # Intent prefixes for labels
+    # Intent prefixes DISABLED per user request
+    # Labels should be clean topic names without prefixes
     INTENT_PREFIXES = {
-        "informational": ["Guide:", "How-To:", "About:", "Understanding:"],
-        "transactional": ["Buy:", "Shop:", "Order:", "Get:"],
-        "commercial": ["Best:", "Reviews:", "Compare:", "Top:"],
-        "navigational": ["", "", "", ""],  # No prefix for navigational
+        "informational": ["", "", "", ""],  # No prefix
+        "transactional": ["", "", "", ""],  # No prefix
+        "commercial": ["", "", "", ""],     # No prefix
+        "navigational": ["", "", "", ""],   # No prefix
     }
     
     def __init__(
@@ -264,32 +265,29 @@ class LabelGenerator:
                 f"  Sample: {keywords_sample}"
             )
         
-        prompt = f"""You are an SEO expert creating cluster labels for keyword research.
+        prompt = f"""You are an SEO expert creating cluster labels.
 
-TASK: Create a short, descriptive label (2-5 words) for each cluster.
+TASK: Create a short label (2-4 words) for each keyword cluster.
 
 RULES:
-1. Labels must be SPECIFIC and DESCRIPTIVE (not generic like "Cluster 1")
-2. Labels must reflect USER INTENT:
-   - Informational: Use "Guide:", "How-To:", "Understanding:" prefix
-   - Transactional: Use "Buy:", "Shop:", "Get:" prefix  
-   - Commercial: Use "Best:", "Reviews:", "Compare:" prefix
-   - Navigational: Use brand/product name directly
-3. Labels must be UNIQUE (no duplicates)
-4. Use Title Case formatting
+1. Labels must be DESCRIPTIVE topic names (not "Cluster 1")
+2. NO prefixes like "Guide:", "Best:", "How-To:" - just the topic
+3. Labels should be the main TOPIC/THEME of the keywords
+4. Labels must be UNIQUE (no duplicates)
+5. Use Title Case
 
-CLUSTERS TO LABEL:
+EXAMPLES of good labels:
+- "Odoo Pricing" (not "Guide: Odoo Pricing")
+- "Running Shoes Reviews" (not "Best: Running Shoes")
+- "API Integration" (not "How-To: API Integration")
+
+CLUSTERS:
 {chr(10).join(cluster_summaries)}
 
-OUTPUT FORMAT (JSON only, no other text):
-{{
-  "labels": [
-    {{"cluster_id": 0, "label": "Your Label Here"}},
-    {{"cluster_id": 1, "label": "Another Label"}}
-  ]
-}}
+OUTPUT (JSON only):
+{{"labels": [{{"cluster_id": 0, "label": "Topic Name"}}]}}
 
-JSON Response:"""
+JSON:"""
         
         return prompt
     
@@ -464,13 +462,9 @@ JSON Response:"""
         top_keywords = analysis.get("top_keywords", [])
         keywords = analysis.get("keywords", [])
         
-        # Strategy 1: Intent prefix + Theme
+        # Strategy 1: Use theme directly (no prefix)
         if theme and len(theme) > 2:
-            prefixes = self.INTENT_PREFIXES.get(intent_type, [""])
-            prefix = prefixes[0] if prefixes[0] else ""
-            
-            label = f"{prefix} {theme}".strip() if prefix else theme
-            
+            label = theme.strip()
             if label.lower() not in used_labels:
                 return label
         

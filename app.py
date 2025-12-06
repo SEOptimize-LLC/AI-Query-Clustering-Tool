@@ -167,10 +167,19 @@ def render_sidebar():
             "Outlier Reassignment Threshold",
             min_value=0.25,
             max_value=0.80,
-            value=0.55,  # Lowered from 0.7 for better coverage
+            value=0.55,
             step=0.05,
-            help="Lower = more keywords assigned (aggressive). "
-                 "0.55 recommended for 90%+ cluster rate."
+            help="Lower = more keywords assigned. 0.55 recommended."
+        )
+        
+        merge_threshold = st.slider(
+            "Cluster Merge Threshold",
+            min_value=0.70,
+            max_value=0.95,
+            value=0.80,
+            step=0.05,
+            help="Clusters with centroid similarity above this "
+                 "will be merged. 0.80 combines 'api odoo' + 'odoo api'."
         )
         
         aggressive_mode = st.checkbox(
@@ -186,6 +195,7 @@ def render_sidebar():
         "min_cluster_size": min_cluster_size,
         "serp_validation": serp_validation,
         "similarity_threshold": similarity_threshold,
+        "merge_threshold": merge_threshold,
         "aggressive_mode": aggressive_mode
     }
 
@@ -579,7 +589,8 @@ async def run_clustering(
             coarse_clusterer=coarse,
             fine_clusterer=fine,
             serp_validator=serp_val,
-            outlier_handler=outlier
+            outlier_handler=outlier,
+            merge_threshold=config.get("merge_threshold", 0.80)
         )
         
         kw_data = {kw["keyword"]: kw for kw in keywords_data}

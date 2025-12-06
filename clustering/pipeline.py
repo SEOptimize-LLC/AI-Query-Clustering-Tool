@@ -1,9 +1,17 @@
 """
 Main clustering pipeline orchestrator.
 Coordinates all stages of the clustering process.
+
+Pipeline with cluster merging to prevent over-fragmentation:
+1. Coarse clustering (MiniBatch K-Means)
+2. Fine-grained sub-clustering (HDBSCAN)
+3. CLUSTER MERGING (combines semantically similar clusters)
+4. SERP validation (optional)
+5. Outlier reassignment
 """
 import numpy as np
-from typing import List, Dict, Callable, Optional
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Dict, Callable, Optional, Tuple
 from dataclasses import dataclass, field
 
 from clustering.coarse_clusterer import CoarseClusterer, CoarseClusterResult
@@ -56,13 +64,17 @@ class ClusteringResult:
 
 class ClusteringPipeline:
     """
-    Orchestrates the multi-stage clustering process.
+    Orchestrates the multi-stage clustering process with cluster merging.
     
     Pipeline:
     1. Coarse clustering (MiniBatch K-Means)
     2. Fine-grained sub-clustering (HDBSCAN)
-    3. SERP validation (for coherence)
-    4. Outlier reassignment
+    3. **CLUSTER MERGING** - Combines semantically similar clusters
+    4. SERP validation (optional)
+    5. Outlier reassignment
+    
+    Cluster merging prevents over-fragmentation of semantically related
+    keywords like "odoo pricing" and "odoo online pricing".
     """
     
     def __init__(
@@ -70,7 +82,8 @@ class ClusteringPipeline:
         coarse_clusterer: CoarseClusterer = None,
         fine_clusterer: FineClusterer = None,
         serp_validator: SERPValidator = None,
-        outlier_handler: OutlierHandler = None
+        outlier_handler: OutlierHandler = None,
+        merge_threshold: float = 0.80  # Merge clusters with >80% similarity
     ):
         """
         Initialize clustering pipeline.
@@ -80,11 +93,13 @@ class ClusteringPipeline:
             fine_clusterer: Second-stage clusterer
             serp_validator: SERP validation (optional)
             outlier_handler: Outlier reassignment handler
+            merge_threshold: Similarity threshold for merging clusters
         """
         self.coarse = coarse_clusterer or CoarseClusterer()
         self.fine = fine_clusterer or FineClusterer()
         self.serp_validator = serp_validator
         self.outlier_handler = outlier_handler or OutlierHandler()
+        self.merge_threshold = merge_threshold
     
     def run(
         self,
@@ -117,40 +132,53 @@ class ClusteringPipeline:
         
         # Stage 2: Fine-grained sub-clustering
         if progress_callback:
-            progress_callback("clustering", 0.3, "Stage 2: Fine sub-clustering...")
+            progress_callback("clustering", 0.25, "Stage 2: Sub-clustering...")
         
-        final_labels, final_centroids = self._run_fine_clustering(
+        fine_labels, fine_centroids = self._run_fine_clustering(
             embeddings,
             coarse_result,
             progress_callback
         )
         
-        # Stage 3: SERP validation (if enabled)
+        # Stage 3: CLUSTER MERGING - Combine similar clusters
+        if progress_callback:
+            progress_callback("clustering", 0.5, "Stage 3: Merging clusters...")
+        
+        merged_labels, merged_centroids = self._merge_similar_clusters(
+            embeddings,
+            fine_labels,
+            fine_centroids
+        )
+        
+        # Stage 4: SERP validation (if enabled)
         validations = []
         if self.serp_validator and not skip_serp_validation:
             if progress_callback:
                 progress_callback(
-                    "serp_validation", 0.0, "Stage 3: SERP validation..."
+                    "serp_validation", 0.0, "Stage 4: SERP validation..."
                 )
             
             validations = self._run_serp_validation(
                 keywords,
                 keyword_data,
-                final_labels,
+                merged_labels,
                 progress_callback
             )
         
-        # Stage 4: Outlier reassignment
+        # Stage 5: Outlier reassignment
         if progress_callback:
             progress_callback(
-                "clustering", 0.8, "Stage 4: Outlier reassignment..."
+                "clustering", 0.75, "Stage 5: Outlier reassignment..."
             )
         
         final_labels, reassignments = self.outlier_handler.reassign_outliers(
             embeddings,
-            final_labels,
-            final_centroids
+            merged_labels,
+            merged_centroids
         )
+        
+        # Recompute centroids after final labels
+        final_centroids = self._compute_all_centroids(embeddings, final_labels)
         
         # Build result
         if progress_callback:
@@ -223,6 +251,115 @@ class ClusteringPipeline:
         
         centroids = np.array(all_centroids) if all_centroids else np.array([])
         return final_labels, centroids
+    
+    def _merge_similar_clusters(
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray,
+        centroids: np.ndarray
+    ) -> tuple:
+        """
+        Merge clusters with similar centroids to prevent over-fragmentation.
+        
+        This is critical for grouping semantically related keywords like:
+        - "odoo pricing" and "odoo online pricing europe"
+        - "api odoo" and "odoo api"
+        
+        Args:
+            embeddings: All keyword embeddings
+            labels: Current cluster labels
+            centroids: Current cluster centroids
+        
+        Returns:
+            Tuple of (merged_labels, merged_centroids)
+        """
+        if len(centroids) < 2:
+            return labels, centroids
+        
+        new_labels = labels.copy()
+        cluster_ids = np.unique(labels[labels >= 0])
+        
+        if len(cluster_ids) < 2:
+            return labels, centroids
+        
+        # Compute centroids for current clusters
+        current_centroids = {}
+        for cid in cluster_ids:
+            mask = labels == cid
+            current_centroids[int(cid)] = np.mean(embeddings[mask], axis=0)
+        
+        # Compute pairwise similarities
+        centroid_list = list(current_centroids.values())
+        centroid_ids = list(current_centroids.keys())
+        centroid_matrix = np.array(centroid_list)
+        
+        # Cosine similarity
+        from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+        similarities = cos_sim(centroid_matrix)
+        
+        # Build merge mapping using Union-Find approach
+        merge_map = {cid: cid for cid in centroid_ids}
+        
+        # Find clusters to merge (similarity > threshold)
+        for i in range(len(centroid_ids)):
+            for j in range(i + 1, len(centroid_ids)):
+                if similarities[i, j] >= self.merge_threshold:
+                    # Merge cluster j into cluster i (keep lower id)
+                    cid_i = centroid_ids[i]
+                    cid_j = centroid_ids[j]
+                    
+                    # Find roots
+                    root_i = self._find_root(merge_map, cid_i)
+                    root_j = self._find_root(merge_map, cid_j)
+                    
+                    if root_i != root_j:
+                        # Merge: point j's root to i's root
+                        merge_map[root_j] = root_i
+        
+        # Apply merges to labels
+        for cid in centroid_ids:
+            root = self._find_root(merge_map, cid)
+            if root != cid:
+                # Merge this cluster into root
+                mask = new_labels == cid
+                new_labels[mask] = root
+        
+        # Renumber clusters to be consecutive
+        unique_new = np.unique(new_labels[new_labels >= 0])
+        id_mapping = {old: new for new, old in enumerate(unique_new)}
+        
+        for old_id, new_id in id_mapping.items():
+            mask = new_labels == old_id
+            new_labels[mask] = new_id
+        
+        # Recompute centroids
+        new_centroids = self._compute_all_centroids(embeddings, new_labels)
+        
+        return new_labels, new_centroids
+    
+    def _find_root(self, merge_map: Dict[int, int], cid: int) -> int:
+        """Find root of cluster in Union-Find structure."""
+        if merge_map[cid] == cid:
+            return cid
+        # Path compression
+        merge_map[cid] = self._find_root(merge_map, merge_map[cid])
+        return merge_map[cid]
+    
+    def _compute_all_centroids(
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray
+    ) -> np.ndarray:
+        """Compute centroids for all clusters."""
+        cluster_ids = np.unique(labels[labels >= 0])
+        centroids = []
+        
+        for cid in sorted(cluster_ids):
+            mask = labels == cid
+            centroid = np.mean(embeddings[mask], axis=0)
+            centroids.append(centroid)
+        
+        return np.array(centroids) if centroids else np.array([])
     
     def _run_serp_validation(
         self,
