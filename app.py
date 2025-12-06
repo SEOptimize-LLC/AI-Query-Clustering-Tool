@@ -23,7 +23,7 @@ st.set_page_config(
 # Imports
 from config.settings import Settings
 from config.api_config import LOCATION_CODES, LANGUAGE_CODES
-from core.job_manager import JobManager
+from core.job_manager import JobManager, JobConfig
 from core.progress_tracker import ProgressTracker
 from storage.supabase_client import SupabaseClient
 from storage.cache_manager import CacheManager
@@ -60,20 +60,23 @@ from export.excel_exporter import ExcelExporter
 
 def init_session_state():
     """Initialize session state variables."""
-    if "job_id" not in st.session_state:
-        st.session_state.job_id = None
-    if "results" not in st.session_state:
-        st.session_state.results = None
-    if "processing" not in st.session_state:
-        st.session_state.processing = False
-    if "error" not in st.session_state:
-        st.session_state.error = None
-    if "csv_preview" not in st.session_state:
-        st.session_state.csv_preview = None
-    if "csv_parser" not in st.session_state:
-        st.session_state.csv_parser = None
-    if "keywords_ready" not in st.session_state:
-        st.session_state.keywords_ready = None
+    defaults = {
+        "job_id": None,
+        "results": None,
+        "processing": False,
+        "fetching_metrics": False,
+        "error": None,
+        "csv_preview": None,
+        "csv_parser": None,
+        "keywords_raw": None,
+        "keywords_validated": None,
+        "keywords_enriched": None,
+        "metrics_fetched": False,
+        "step": "upload"  # upload, validate, enrich, cluster, results
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def check_api_keys() -> dict:
@@ -180,7 +183,7 @@ def render_sidebar():
 
 def render_upload_section():
     """Render file upload section with column selection."""
-    st.markdown("## 📤 Upload Keywords")
+    st.markdown("## 📤 Step 1: Upload Keywords")
     
     col1, col2 = st.columns([2, 1])
     
@@ -202,7 +205,6 @@ def render_upload_section():
     
     # Process uploaded file
     if uploaded_file is not None:
-        # Check if we need to preview (new file or different file)
         file_key = f"{uploaded_file.name}_{uploaded_file.size}"
         
         if (st.session_state.csv_preview is None or
@@ -217,7 +219,11 @@ def render_upload_section():
                 st.session_state.csv_preview = preview
                 st.session_state.csv_parser = parser
                 st.session_state.file_key = file_key
-                st.session_state.keywords_ready = None
+                st.session_state.keywords_raw = None
+                st.session_state.keywords_validated = None
+                st.session_state.keywords_enriched = None
+                st.session_state.metrics_fetched = False
+                st.session_state.step = "upload"
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 return None
@@ -225,7 +231,6 @@ def render_upload_section():
         preview = st.session_state.csv_preview
         parser = st.session_state.csv_parser
         
-        # Show file info
         st.success(
             f"📄 Loaded **{preview['row_count']:,}** rows "
             f"with **{len(preview['columns'])}** columns"
@@ -237,7 +242,6 @@ def render_upload_section():
         col_a, col_b, col_c = st.columns(3)
         
         with col_a:
-            # Keyword column (required)
             kw_options = [""] + preview['columns']
             default_kw = 0
             if preview['detected_keyword_column']:
@@ -256,7 +260,6 @@ def render_upload_section():
             )
         
         with col_b:
-            # Volume column (optional)
             vol_options = ["(none)"] + preview['columns']
             default_vol = 0
             if preview['detected_volume_column']:
@@ -275,7 +278,6 @@ def render_upload_section():
             )
         
         with col_c:
-            # KD column (optional)
             kd_options = ["(none)"] + preview['columns']
             default_kd = 0
             if preview['detected_kd_column']:
@@ -311,34 +313,229 @@ def render_upload_section():
                         volume_column=vol,
                         kd_column=kd
                     )
-                    st.session_state.keywords_ready = keywords_data
+                    st.session_state.keywords_raw = keywords_data
+                    st.session_state.step = "validate"
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error parsing keywords: {e}")
         else:
             st.warning("⚠️ Please select a keyword column")
-        
-        return st.session_state.keywords_ready
     else:
         # Reset state when no file
         st.session_state.csv_preview = None
         st.session_state.csv_parser = None
-        st.session_state.keywords_ready = None
+        st.session_state.keywords_raw = None
         st.session_state.file_key = None
+
+
+def render_validation_section():
+    """Render validation and deduplication section."""
+    st.markdown("## 🔍 Step 2: Validation")
     
-    return None
+    keywords_data = st.session_state.keywords_raw
+    
+    if keywords_data is None:
+        st.info("Upload keywords first")
+        return
+    
+    # Validate
+    validator = KeywordValidator()
+    valid, invalid = validator.validate_batch(keywords_data)
+    
+    if invalid:
+        st.warning(f"⚠️ {len(invalid)} invalid keywords removed")
+    
+    # Deduplicate
+    dedup = KeywordDeduplicator()
+    unique = dedup.deduplicate(valid)
+    
+    if len(unique) < len(valid):
+        st.info(f"🔄 Removed {len(valid) - len(unique)} duplicates")
+    
+    # Store validated keywords
+    st.session_state.keywords_validated = unique
+    
+    # Show summary
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Keywords Ready", f"{len(unique):,}")
+    with col2:
+        has_vol = sum(
+            1 for kw in unique
+            if kw.get("search_volume", 0) > 0
+        )
+        st.metric("With Volume Data", f"{has_vol:,}")
+    with col3:
+        has_kd = sum(
+            1 for kw in unique
+            if kw.get("keyword_difficulty", 0) > 0
+        )
+        st.metric("With KD Data", f"{has_kd:,}")
+    
+    # Check if metrics already in file
+    if has_vol == len(unique):
+        st.success("✅ All keywords have search volume data from file")
+        st.session_state.keywords_enriched = unique
+        st.session_state.metrics_fetched = True
+    
+    st.markdown("---")
 
 
-async def process_keywords(
+async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
+    """Fetch metrics from DataForSEO."""
+    settings = Settings()
+    
+    supabase = SupabaseClient(settings.supabase_url, settings.supabase_key)
+    cache = CacheManager(supabase)
+    
+    keywords_text = [kw["keyword"] for kw in keywords_data]
+    
+    # Check cache first
+    cached_metrics = cache.get_cached_metrics(keywords_text)
+    uncached = [kw for kw in keywords_text if kw not in cached_metrics]
+    
+    progress_bar.progress(0.1, text=f"Found {len(cached_metrics)} cached")
+    
+    if uncached:
+        dataforseo = DataForSEOClient(
+            login=settings.dataforseo_login,
+            password=settings.dataforseo_password
+        )
+        
+        location_code = LOCATION_CODES.get(config["location"], 2840)
+        language_code = LANGUAGE_CODES.get(config["language"], "en")
+        
+        def update_progress(pct):
+            progress_bar.progress(
+                0.1 + pct * 0.8,
+                text=f"Fetching metrics: {int(pct*100)}%"
+            )
+        
+        new_metrics = await dataforseo.get_keyword_metrics(
+            keywords=uncached,
+            location_code=location_code,
+            language_code=language_code,
+            progress_callback=update_progress
+        )
+        
+        # Cache new metrics
+        cache.cache_metrics(new_metrics)
+        cached_metrics.update(new_metrics)
+    
+    progress_bar.progress(0.95, text="Merging data...")
+    
+    # Merge metrics into keyword data
+    enriched = []
+    for kw in keywords_data:
+        kw_copy = kw.copy()
+        if kw["keyword"] in cached_metrics:
+            metrics = cached_metrics[kw["keyword"]]
+            kw_copy["search_volume"] = metrics.get("search_volume", 0)
+            kw_copy["keyword_difficulty"] = metrics.get(
+                "keyword_difficulty", 0
+            )
+        enriched.append(kw_copy)
+    
+    progress_bar.progress(1.0, text="Complete!")
+    
+    return enriched
+
+
+def render_enrichment_section(config: dict):
+    """Render metrics enrichment section."""
+    st.markdown("## 📊 Step 3: Fetch Metrics (Optional)")
+    
+    keywords = st.session_state.keywords_validated
+    
+    if keywords is None:
+        st.info("Validate keywords first")
+        return
+    
+    # Check if already enriched
+    if st.session_state.metrics_fetched:
+        st.success("✅ Metrics already fetched!")
+        
+        # Show enriched data summary
+        enriched = st.session_state.keywords_enriched or keywords
+        total_vol = sum(kw.get("search_volume", 0) for kw in enriched)
+        avg_kd = (
+            sum(kw.get("keyword_difficulty", 0) for kw in enriched) /
+            len(enriched) if enriched else 0
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Search Volume", f"{total_vol:,}")
+        with col2:
+            st.metric("Average KD", f"{avg_kd:.1f}")
+        
+        # Show top keywords by volume
+        with st.expander("📊 Top Keywords by Volume"):
+            sorted_kw = sorted(
+                enriched,
+                key=lambda x: x.get("search_volume", 0),
+                reverse=True
+            )[:20]
+            
+            import pandas as pd
+            df = pd.DataFrame([
+                {
+                    "Keyword": kw["keyword"],
+                    "Volume": kw.get("search_volume", 0),
+                    "KD": kw.get("keyword_difficulty", 0)
+                }
+                for kw in sorted_kw
+            ])
+            st.dataframe(df, use_container_width=True)
+    else:
+        st.info(
+            "📡 Fetch search volume and keyword difficulty from DataForSEO. "
+            "This step is optional if your file already contains this data."
+        )
+        
+        # Estimate cost
+        uncached_estimate = len(keywords)  # Assume all uncached for estimate
+        cost_estimate = (uncached_estimate / 1000) * 0.05  # $0.05 per 1000
+        
+        st.caption(
+            f"Estimated cost: ~${cost_estimate:.2f} for {len(keywords):,} keywords"
+        )
+        
+        if st.button("📊 Fetch Metrics from DataForSEO", type="secondary"):
+            st.session_state.fetching_metrics = True
+            progress_bar = st.progress(0, text="Starting...")
+            
+            try:
+                enriched = asyncio.run(
+                    fetch_metrics_async(keywords, config, progress_bar)
+                )
+                st.session_state.keywords_enriched = enriched
+                st.session_state.metrics_fetched = True
+                st.session_state.fetching_metrics = False
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error fetching metrics: {e}")
+                st.session_state.fetching_metrics = False
+        
+        # Allow skipping
+        if st.button("⏭️ Skip - Use Existing Data", type="secondary"):
+            st.session_state.keywords_enriched = keywords
+            st.session_state.metrics_fetched = True
+            st.rerun()
+    
+    st.markdown("---")
+
+
+async def run_clustering(
     keywords_data: list,
     config: dict,
     progress_container
 ):
     """
-    Main processing pipeline.
+    Run the clustering pipeline (embeddings + clustering + labeling).
     
     Args:
-        keywords_data: List of keyword dictionaries
+        keywords_data: List of keyword dictionaries with metrics
         config: Processing configuration
         progress_container: Streamlit container for progress
     """
@@ -348,89 +545,34 @@ async def process_keywords(
     # Initialize components
     supabase = SupabaseClient(settings.supabase_url, settings.supabase_key)
     cache = CacheManager(supabase)
-    job_manager = JobManager(supabase)
     
-    # Extract keyword strings
     keywords_text = [kw["keyword"] for kw in keywords_data]
     
-    # Create job with JobConfig
-    from core.job_manager import JobConfig
-    job_config = JobConfig(
-        location_code=LOCATION_CODES.get(config["location"], 2840),
-        location_name=config["location"],
-        language_code=LANGUAGE_CODES.get(config["language"], "en"),
-        outlier_similarity_threshold=config["similarity_threshold"],
-        llm_model=config.get("llm_model", "anthropic/claude-sonnet-4")
-    )
-    
-    job = job_manager.create_job(
-        keywords=keywords_text,
-        config=job_config
-    )
-    job_id = job.id
+    # Generate job ID
+    import uuid
+    job_id = str(uuid.uuid4())
     st.session_state.job_id = job_id
     
-    # Progress tracker
-    progress = ProgressTracker(total_keywords=len(keywords_data))
-    progress_placeholder = progress_container.empty()
-    
-    def update_progress(stage, pct, message):
-        progress.update_stage(stage, pct, message)
-        with progress_placeholder:
-            progress.render()
+    # Simple progress tracker
+    progress_bar = progress_container.progress(0, text="Starting...")
+    status_text = progress_container.empty()
     
     try:
-        # Stage 1: Fetch metrics
-        update_progress("metrics", 0.0, "Fetching keyword metrics...")
-        
-        # Check cache first
-        cached_metrics = cache.get_cached_metrics(keywords_text)
-        uncached = [kw for kw in keywords_text if kw not in cached_metrics]
-        
-        if uncached:
-            dataforseo = DataForSEOClient(
-                login=settings.dataforseo_login,
-                password=settings.dataforseo_password
-            )
-            
-            location_code = LOCATION_CODES.get(config["location"], 2840)
-            language_code = LANGUAGE_CODES.get(config["language"], "en")
-            
-            new_metrics = await dataforseo.get_keyword_metrics(
-                keywords=uncached,
-                location_code=location_code,
-                language_code=language_code,
-                progress_callback=lambda p: update_progress(
-                    "metrics", p, f"Fetching metrics: {int(p*100)}%"
-                )
-            )
-            
-            # Cache new metrics
-            cache.cache_metrics(new_metrics)
-            cached_metrics.update(new_metrics)
-        
-        # Merge metrics into keyword data
-        for kw in keywords_data:
-            if kw["keyword"] in cached_metrics:
-                metrics = cached_metrics[kw["keyword"]]
-                kw["search_volume"] = metrics.get("search_volume", 0)
-                kw["keyword_difficulty"] = metrics.get("keyword_difficulty", 0)
-        
-        update_progress("metrics", 1.0, "Metrics fetched!")
-        
-        # Stage 2: Generate embeddings
-        update_progress("embedding", 0.0, "Generating embeddings...")
+        # Stage 1: Generate embeddings
+        progress_bar.progress(0.05, text="Generating embeddings...")
+        status_text.markdown("🧠 **Embedding keywords...**")
         
         embedder = OpenAIEmbedder(api_key=settings.openai_api_key)
         batch_processor = BatchEmbeddingProcessor(embedder, supabase)
         
-        # process_keywords is sync, returns Dict[str, np.ndarray]
+        def embedding_progress(p):
+            pct = 0.05 + p.progress * 0.35
+            progress_bar.progress(pct, text=f"Embedding: {int(p.progress*100)}%")
+        
         embeddings_dict = batch_processor.process_keywords(
             keywords=keywords_text,
             job_id=job_id,
-            progress_callback=lambda p: update_progress(
-                "embedding", p.progress, f"Embedding: {int(p.progress*100)}%"
-            )
+            progress_callback=embedding_progress
         )
         
         # Convert dict to ordered numpy array
@@ -439,12 +581,10 @@ async def process_keywords(
             embeddings_dict[kw] for kw in keywords_text
         ])
         
-        update_progress("embedding", 1.0, "Embeddings complete!")
+        # Stage 2: Clustering
+        progress_bar.progress(0.45, text="Clustering keywords...")
+        status_text.markdown("🎯 **Clustering keywords...**")
         
-        # Stage 3: Clustering
-        update_progress("clustering", 0.0, "Clustering keywords...")
-        
-        # Build clustering pipeline
         coarse = CoarseClusterer()
         fine = FineClusterer(min_cluster_size=config["min_cluster_size"])
         outlier = OutlierHandler(threshold=config["similarity_threshold"])
@@ -461,21 +601,26 @@ async def process_keywords(
             outlier_handler=outlier
         )
         
-        # Build keyword data dict
         kw_data = {kw["keyword"]: kw for kw in keywords_data}
+        
+        def cluster_progress(stage, pct, msg):
+            base = 0.45
+            progress_bar.progress(
+                base + pct * 0.25,
+                text=f"Clustering: {msg}"
+            )
         
         cluster_result = pipeline.run(
             embeddings=embeddings,
             keywords=keywords_text,
             keyword_data=kw_data,
-            progress_callback=lambda s, p, m: update_progress(s, p, m),
+            progress_callback=cluster_progress,
             skip_serp_validation=not config["serp_validation"]
         )
         
-        update_progress("clustering", 1.0, "Clustering complete!")
-        
-        # Stage 4: Label generation
-        update_progress("labeling", 0.0, "Generating cluster labels...")
+        # Stage 3: Label generation
+        progress_bar.progress(0.75, text="Generating labels...")
+        status_text.markdown("🏷️ **Generating cluster labels...**")
         
         llm = OpenRouterClient(
             api_key=settings.openrouter_api_key,
@@ -484,7 +629,6 @@ async def process_keywords(
         intent_classifier = IntentClassifier()
         label_gen = LabelGenerator(llm, intent_classifier)
         
-        # Prepare cluster data for labeling
         cluster_data = {}
         for cid, info in cluster_result.clusters.items():
             cluster_data[cid] = {
@@ -501,24 +645,27 @@ async def process_keywords(
                 )
             }
         
+        def label_progress(stage, pct, msg):
+            progress_bar.progress(
+                0.75 + pct * 0.2,
+                text=f"Labeling: {msg}"
+            )
+        
         label_result = await label_gen.generate_labels(
             clusters=cluster_data,
-            progress_callback=lambda s, p, m: update_progress(s, p, m)
+            progress_callback=label_progress
         )
         
-        update_progress("labeling", 1.0, "Labels generated!")
-        
-        # Stage 5: Aggregate metrics
-        update_progress("aggregating", 0.5, "Aggregating metrics...")
+        # Stage 4: Aggregate and build results
+        progress_bar.progress(0.95, text="Finalizing...")
+        status_text.markdown("📊 **Building results...**")
         
         aggregator = MetricsAggregator()
         
-        # Build final results
         final_clusters = []
         for cid, info in cluster_result.clusters.items():
             label = label_result.labels.get(cid)
             
-            # Get keyword metrics for cluster
             cluster_kw_data = [
                 kw_data.get(kw, {"keyword": kw})
                 for kw in info.keywords
@@ -563,7 +710,6 @@ async def process_keywords(
             intent = c["intent"]
             intent_dist[intent] = intent_dist.get(intent, 0) + 1
         
-        # Build results
         results = {
             "job_id": job_id,
             "clusters": sorted(
@@ -590,21 +736,64 @@ async def process_keywords(
             "embeddings": embeddings
         }
         
-        # Save to job
-        job_manager.update_job(job_id, "completed", results)
-        
-        update_progress("aggregating", 1.0, "Processing complete!")
+        progress_bar.progress(1.0, text="Complete!")
+        status_text.markdown("✅ **Clustering complete!**")
         
         return results
         
     except Exception as e:
-        job_manager.update_job(job_id, "failed", {"error": str(e)})
+        status_text.markdown(f"❌ **Error:** {e}")
         raise
+
+
+def render_clustering_section(config: dict):
+    """Render the clustering section."""
+    st.markdown("## 🎯 Step 4: Cluster Keywords")
+    
+    keywords = st.session_state.keywords_enriched
+    
+    if keywords is None:
+        st.info("Complete previous steps first")
+        return
+    
+    st.info(
+        f"Ready to cluster **{len(keywords):,}** keywords. "
+        "This will generate embeddings, cluster by semantic similarity, "
+        "and create consistent labels using AI."
+    )
+    
+    # Estimate time/cost
+    embed_cost = (len(keywords) / 1000) * 0.00013 * 3072  # $0.00013 per 1K tokens
+    llm_cost = 0.50  # Rough estimate for labeling
+    
+    st.caption(
+        f"Estimated cost: ~${embed_cost + llm_cost:.2f} | "
+        f"Time: ~{len(keywords) // 100 + 1} minutes"
+    )
+    
+    if st.button("🚀 Start Clustering", type="primary"):
+        st.session_state.processing = True
+        st.session_state.error = None
+        
+        progress_container = st.container()
+        
+        try:
+            results = asyncio.run(
+                run_clustering(keywords, config, progress_container)
+            )
+            st.session_state.results = results
+            st.session_state.processing = False
+            st.session_state.step = "results"
+            st.rerun()
+            
+        except Exception as e:
+            st.session_state.error = str(e)
+            st.session_state.processing = False
+            st.error(f"Error: {e}")
 
 
 def render_results(results: dict):
     """Render clustering results."""
-    st.markdown("---")
     st.markdown("## 📊 Results")
     
     # Summary metrics
@@ -637,7 +826,6 @@ def render_results(results: dict):
         st.markdown("### Cluster Overview")
         display_cluster_table(results["clusters"])
         
-        # Expandable cluster details
         st.markdown("### Cluster Details")
         for cluster in results["clusters"][:20]:
             with st.expander(
@@ -663,32 +851,6 @@ def render_results(results: dict):
     with tab2:
         st.markdown("### Visualizations")
         
-        # Cluster scatter plot
-        if "embeddings" in results:
-            st.markdown("#### Cluster Map")
-            labels_array = []
-            names_map = {}
-            for c in results["clusters"]:
-                names_map[c["id"]] = c["label"]
-            
-            # Reconstruct labels
-            import numpy as np
-            all_kw = []
-            for c in results["clusters"]:
-                for kw in c["keywords"]:
-                    if isinstance(kw, dict):
-                        all_kw.append(kw["keyword"])
-                    else:
-                        all_kw.append(kw)
-            
-            fig = create_cluster_scatter(
-                embeddings=results["embeddings"][:min(5000, len(all_kw))],
-                labels=np.array([0] * min(5000, len(all_kw))),
-                keywords=all_kw[:5000],
-                cluster_names=names_map
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
         # Distribution chart
         st.markdown("#### Cluster Size Distribution")
         sizes = {c["id"]: c["size"] for c in results["clusters"]}
@@ -699,7 +861,8 @@ def render_results(results: dict):
         # Volume treemap
         st.markdown("#### Volume Distribution")
         fig = create_volume_treemap(
-            [{"cluster_id": c["id"], "volume": c["total_volume"], "size": c["size"]}
+            [{"cluster_id": c["id"], "volume": c["total_volume"],
+              "size": c["size"]}
              for c in results["clusters"]],
             names
         )
@@ -743,7 +906,6 @@ def render_results(results: dict):
             
             csv_exporter = CSVExporter()
             
-            # Full export
             csv_full = csv_exporter.export_clusters(
                 results["clusters"],
                 include_keywords=True
@@ -755,7 +917,6 @@ def render_results(results: dict):
                 mime="text/csv"
             )
             
-            # Summary export
             csv_summary = csv_exporter.export_clusters(
                 results["clusters"],
                 include_keywords=False
@@ -796,67 +957,30 @@ def main():
         "using AI-powered analysis."
     )
     
-    # Upload section - returns keywords_data when ready
-    keywords_data = render_upload_section()
-    
-    if keywords_data is not None:
-        st.markdown("---")
-        st.markdown("### 🔍 Keyword Validation")
-        
-        # Validate
-        validator = KeywordValidator()
-        valid, invalid = validator.validate_batch(keywords_data)
-        
-        if invalid:
-            st.warning(f"{len(invalid)} invalid keywords removed")
-        
-        # Deduplicate
-        dedup = KeywordDeduplicator()
-        unique = dedup.deduplicate(valid)
-        
-        if len(unique) < len(valid):
-            st.info(f"Removed {len(valid) - len(unique)} duplicates")
-        
-        # Show ready count with metrics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Keywords Ready", f"{len(unique):,}")
-        with col2:
-            has_vol = sum(
-                1 for kw in unique
-                if kw.get("search_volume", 0) > 0
-            )
-            st.metric("With Volume Data", f"{has_vol:,}")
-        with col3:
-            has_kd = sum(
-                1 for kw in unique
-                if kw.get("keyword_difficulty", 0) > 0
-            )
-            st.metric("With KD Data", f"{has_kd:,}")
-        
-        # Process button
-        if st.button("🚀 Start Clustering", type="primary"):
-            st.session_state.processing = True
-            st.session_state.error = None
-            
-            progress_container = st.container()
-            
-            try:
-                results = asyncio.run(
-                    process_keywords(unique, config, progress_container)
-                )
-                st.session_state.results = results
-                st.session_state.processing = False
-                st.rerun()
-                
-            except Exception as e:
-                st.session_state.error = str(e)
-                st.session_state.processing = False
-                st.error(f"Error: {e}")
-    
-    # Show results if available
+    # Show workflow steps
     if st.session_state.results:
         render_results(st.session_state.results)
+        
+        # Reset button
+        if st.button("🔄 Start New Analysis"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+    else:
+        # Step 1: Upload
+        render_upload_section()
+        
+        # Step 2: Validation (if we have raw keywords)
+        if st.session_state.keywords_raw:
+            render_validation_section()
+            
+            # Step 3: Enrichment (if validated)
+            if st.session_state.keywords_validated:
+                render_enrichment_section(config)
+                
+                # Step 4: Clustering (if enriched)
+                if st.session_state.metrics_fetched:
+                    render_clustering_section(config)
     
     # Show error if any
     if st.session_state.error:
