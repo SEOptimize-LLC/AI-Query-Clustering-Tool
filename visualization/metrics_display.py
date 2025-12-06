@@ -164,25 +164,24 @@ def display_cluster_table(
     
     df = pd.DataFrame(data)
     
-    # Style the dataframe
-    styled_df = df.style.background_gradient(
-        subset=["Volume"],
-        cmap="Blues"
-    ).background_gradient(
-        subset=["Quality"],
-        cmap="RdYlGn",
-        vmin=0,
-        vmax=100
-    ).format({
-        "Volume": "{:,.0f}",
-        "Avg. KD": "{:.1f}",
-        "Quality": "{:.0f}"
-    })
-    
+    # Format columns without background_gradient (avoids matplotlib dependency)
     st.dataframe(
-        styled_df,
+        df,
         use_container_width=True,
-        height=400
+        height=400,
+        column_config={
+            "Cluster": st.column_config.TextColumn("Cluster"),
+            "Keywords": st.column_config.NumberColumn("Keywords", format="%d"),
+            "Volume": st.column_config.NumberColumn("Volume", format="%,d"),
+            "Avg. KD": st.column_config.NumberColumn("Avg. KD", format="%.1f"),
+            "Intent": st.column_config.TextColumn("Intent"),
+            "Quality": st.column_config.ProgressColumn(
+                "Quality",
+                min_value=0,
+                max_value=100,
+                format="%.0f"
+            )
+        }
     )
 
 
