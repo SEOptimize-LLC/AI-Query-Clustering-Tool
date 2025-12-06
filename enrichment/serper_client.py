@@ -4,6 +4,7 @@ Serper.dev API client for Google SERP data.
 import streamlit as st
 import asyncio
 import aiohttp
+import requests
 from typing import List, Dict, Optional, Callable
 from dataclasses import dataclass, field
 
@@ -250,16 +251,29 @@ class SerperClient:
         num_results: int = 10
     ) -> SERPResult:
         """
-        Synchronous wrapper for search.
+        Synchronous search using requests library.
         """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                self.search(query, location, num_results)
+        if not self.is_configured:
+            raise APIError("Serper API key not configured", service="Serper")
+        
+        url = f"{self.BASE_URL}/search"
+        payload = {"q": query, "location": location, "num": num_results}
+        headers = {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 429:
+            raise RateLimitError(service="Serper", retry_after=60)
+        
+        if response.status_code != 200:
+            raise APIError(
+                f"Serper API error: {response.text}",
+                service="Serper",
+                status_code=response.status_code,
+                response=response.text
             )
-        finally:
-            loop.close()
+        
+        return self._parse_response(query, response.json())
     
     def batch_search_sync(
         self,
@@ -270,22 +284,23 @@ class SerperClient:
         progress_callback: Callable = None
     ) -> Dict[str, SERPResult]:
         """
-        Synchronous wrapper for batch_search.
+        Synchronous batch search using requests library.
         """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                self.batch_search(
-                    queries,
-                    location,
-                    num_results,
-                    concurrency,
-                    progress_callback
-                )
-            )
-        finally:
-            loop.close()
+        if not self.is_configured:
+            raise APIError("Serper API key not configured", service="Serper")
+        
+        results = {}
+        
+        for i, query in enumerate(queries):
+            try:
+                results[query] = self.search_sync(query, location, num_results)
+            except Exception:
+                results[query] = SERPResult(keyword=query)
+            
+            if progress_callback:
+                progress_callback(i + 1, len(queries))
+        
+        return results
 
 
 def get_serper_client() -> Optional[SerperClient]:
