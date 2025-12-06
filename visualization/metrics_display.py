@@ -326,6 +326,15 @@ def _display_gauge(
     suffix: str = ""
 ):
     """Display a simple gauge using progress bar."""
+    import math
+    
+    # Handle NaN, infinity, and None
+    if value is None or math.isnan(value) or math.isinf(value):
+        value = 0.0
+    
+    # Clamp to valid range
+    value = max(0.0, min(100.0, float(value)))
+    
     color = (
         "green" if value >= 70
         else "orange" if value >= 40
@@ -333,7 +342,7 @@ def _display_gauge(
     )
     
     st.markdown(f"**{label}**")
-    st.progress(min(value / 100, 1.0))
+    st.progress(value / 100.0)
     st.markdown(f":{color}[{value:.1f}{suffix}]")
 
 
