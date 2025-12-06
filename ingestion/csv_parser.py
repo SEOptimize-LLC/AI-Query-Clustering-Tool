@@ -29,14 +29,15 @@ class CSVParser:
     VOLUME_COLUMN_NAMES = [
         "search volume", "searchvolume", "search_volume",
         "volume", "vol", "monthly searches", "monthly_searches",
-        "searches", "avg_monthly_searches", "avg monthly searches",
-        "msv", "sv", "impressions", "clicks"
+        "avg_monthly_searches", "avg monthly searches",
+        "msv", "sv"
+        # NOTE: "impressions", "clicks" removed - those are GSC metrics, not search volume
     ]
     
     KD_COLUMN_NAMES = [
         "keyword difficulty", "keyword_difficulty", "kd",
-        "difficulty", "seo difficulty", "seo_difficulty",
-        "competition", "comp", "position", "ctr"
+        "difficulty", "seo difficulty", "seo_difficulty"
+        # NOTE: "competition", "position", "ctr" removed - those are different metrics
     ]
     
     def __init__(self):

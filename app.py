@@ -608,7 +608,7 @@ async def run_clustering(
                     reverse=True
                 )[:10],
                 "serp_data": (
-                    info.serp_validation.top_domains
+                    info.serp_validation.common_urls
                     if info.serp_validation
                     else None
                 )
