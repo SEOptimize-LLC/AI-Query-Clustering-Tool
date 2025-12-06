@@ -391,7 +391,7 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
     keywords_text = [kw["keyword"] for kw in keywords_data]
     
     # Check cache first
-    cached_metrics = cache.get_cached_metrics(keywords_text)
+    cached_metrics = cache.get_keyword_metrics(keywords_text)
     uncached = [kw for kw in keywords_text if kw not in cached_metrics]
     
     progress_bar.progress(0.1, text=f"Found {len(cached_metrics)} cached")
@@ -419,7 +419,7 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
         )
         
         # Cache new metrics
-        cache.cache_metrics(new_metrics)
+        cache.save_keyword_metrics(new_metrics)
         cached_metrics.update(new_metrics)
     
     progress_bar.progress(0.95, text="Merging data...")
