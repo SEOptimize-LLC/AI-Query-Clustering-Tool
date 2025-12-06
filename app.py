@@ -641,20 +641,21 @@ async def run_clustering(
             ]
             
             agg = aggregator.aggregate_cluster(cluster_kw_data)
+            priority = aggregator.calculate_priority_score(agg)
             
             final_clusters.append({
                 "id": cid,
                 "label": label.label if label else f"Cluster {cid}",
                 "keywords": cluster_kw_data,
                 "size": info.size,
-                "total_volume": agg["total_volume"],
-                "avg_difficulty": agg["avg_difficulty"],
+                "total_volume": agg.total_search_volume,
+                "avg_difficulty": agg.avg_keyword_difficulty,
                 "intent": (
                     label.intent.primary_intent.value
                     if label else "unknown"
                 ),
                 "quality_score": info.quality_score,
-                "priority_score": agg["priority_score"]
+                "priority_score": priority
             })
         
         # Get unclustered
