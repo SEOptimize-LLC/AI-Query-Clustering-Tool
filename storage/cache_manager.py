@@ -54,15 +54,32 @@ class CacheManager:
             max_age_days=self.CACHE_TTL["keyword_metrics"]
         )
     
-    def save_keyword_metrics(self, metrics: Dict[str, dict]):
+    def save_keyword_metrics(self, metrics: Dict):
         """
         Cache keyword metrics.
         
         Args:
-            metrics: Dict mapping keyword -> metrics dict
+            metrics: Dict mapping keyword -> metrics (dict or KeywordMetrics)
         """
-        if metrics:
-            self.db.cache_metrics(metrics)
+        if not metrics:
+            return
+        
+        # Convert KeywordMetrics objects to dicts if needed
+        metrics_dicts = {}
+        for kw, m in metrics.items():
+            if hasattr(m, 'search_volume'):
+                # It's a KeywordMetrics dataclass
+                metrics_dicts[kw] = {
+                    "search_volume": m.search_volume or 0,
+                    "keyword_difficulty": m.keyword_difficulty or 0.0,
+                    "cpc": m.cpc or 0.0,
+                    "competition": m.competition or 0.0
+                }
+            else:
+                # Already a dict
+                metrics_dicts[kw] = m
+        
+        self.db.cache_metrics(metrics_dicts)
     
     def get_uncached_keywords(
         self,

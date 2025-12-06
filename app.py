@@ -416,10 +416,17 @@ def fetch_metrics_sync(keywords_data: list, config: dict, progress_bar):
         kw_copy = kw.copy()
         if kw["keyword"] in cached_metrics:
             metrics = cached_metrics[kw["keyword"]]
-            kw_copy["search_volume"] = metrics.get("search_volume", 0)
-            kw_copy["keyword_difficulty"] = metrics.get(
-                "keyword_difficulty", 0
-            )
+            # Handle both dict (from cache) and KeywordMetrics (from API)
+            if hasattr(metrics, 'search_volume'):
+                # KeywordMetrics dataclass from API
+                kw_copy["search_volume"] = metrics.search_volume or 0
+                kw_copy["keyword_difficulty"] = metrics.keyword_difficulty or 0
+            else:
+                # Dict from Supabase cache
+                kw_copy["search_volume"] = metrics.get("search_volume", 0)
+                kw_copy["keyword_difficulty"] = metrics.get(
+                    "keyword_difficulty", 0
+                )
         enriched.append(kw_copy)
     
     progress_bar.progress(1.0, text="Complete!")
