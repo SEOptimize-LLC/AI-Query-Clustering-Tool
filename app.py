@@ -601,7 +601,7 @@ async def run_clustering(
         serp_val = None
         if config["serp_validation"]:
             serper = SerperClient(api_key=settings.serper_api_key)
-            serp_val = SERPValidator(serper, cache)
+            serp_val = SERPValidator(serper)
         
         pipeline = ClusteringPipeline(
             coarse_clusterer=coarse,
