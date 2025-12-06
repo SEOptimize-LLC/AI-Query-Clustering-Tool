@@ -157,8 +157,9 @@ class DataForSEOClient:
                     retry_after=60
                 )
             
+            text = await response.text()
+            
             if response.status != 200:
-                text = await response.text()
                 raise APIError(
                     f"DataForSEO API error: {text}",
                     service="DataForSEO",
@@ -166,16 +167,29 @@ class DataForSEOClient:
                     response=text
                 )
             
-            data = await response.json()
+            import json
+            data = json.loads(text)
             
-            # Debug: Show response status
-            st.caption(f"🔧 API response status: {data.get('status_code')}")
+            # Debug: Show full response for first batch
+            st.caption(f"🔧 HTTP Status: {response.status}")
+            st.caption(f"🔧 API status_code: {data.get('status_code')}")
+            st.caption(f"🔧 API status_message: {data.get('status_message')}")
+            
             tasks = data.get('tasks', []) or []
             if tasks:
                 task = tasks[0]
                 st.caption(f"🔧 Task status: {task.get('status_code')} - {task.get('status_message')}")
                 result = task.get('result', []) or []
                 st.caption(f"🔧 Results count: {len(result)}")
+                
+                # Show first result item structure
+                if result:
+                    first = result[0]
+                    st.caption(f"🔧 First result keys: {list(first.keys())}")
+                    st.caption(f"🔧 First kw: {first.get('keyword')} vol: {first.get('search_volume')}")
+            else:
+                st.caption(f"🔧 No tasks in response!")
+                st.caption(f"🔧 Full response (first 500 chars): {text[:500]}")
             
             return self._parse_response(data)
     
