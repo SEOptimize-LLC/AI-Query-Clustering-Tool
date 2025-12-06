@@ -1,18 +1,20 @@
 """
-Label generator with two-phase consistency mechanism.
-Generates consistent, non-overlapping labels for clusters.
+Label generator with intelligent fallback mechanism.
+Generates consistent, semantic labels for clusters based on user intent.
+
+Best Practices Applied:
+- Focus on User Intent: Labels signal what the user will find
+- Be Specific: Avoid broad topics
+- Actionable & Descriptive: Include action or solution keywords provide
+- Avoid generic labels like "Cluster 1" or "Miscellaneous"
 """
 import json
-import asyncio
-from typing import List, Dict, Callable
+import re
+from typing import List, Dict, Callable, Optional
 from dataclasses import dataclass, field
+from collections import Counter
 
 from labeling.intent_classifier import IntentClassifier, IntentResult
-from labeling.prompts import (
-    format_cluster_summary_prompt,
-    format_consistent_labeling_prompt,
-    format_description_prompt
-)
 
 
 @dataclass
@@ -62,16 +64,25 @@ class LabelingResult:
 
 class LabelGenerator:
     """
-    Generates consistent cluster labels using two-phase approach.
+    Generates consistent cluster labels using two-phase approach
+    with intelligent fallback.
     
-    Phase 1: Generate summaries for each cluster independently
-    Phase 2: Generate all labels in single LLM call with global context
+    Phase 1: Attempt LLM-based labeling
+    Phase 2: Smart fallback using keyword analysis if LLM fails
     
-    This ensures:
-    - Labels are mutually exclusive
-    - Consistent naming conventions
-    - No orphan clusters without proper labels
+    Labels follow SEO best practices:
+    - User intent focused (Informational, Transactional, etc.)
+    - Specific and descriptive (2-5 words)
+    - Action-oriented when appropriate
     """
+    
+    # Intent prefixes for labels
+    INTENT_PREFIXES = {
+        "informational": ["Guide:", "How-To:", "About:", "Understanding:"],
+        "transactional": ["Buy:", "Shop:", "Order:", "Get:"],
+        "commercial": ["Best:", "Reviews:", "Compare:", "Top:"],
+        "navigational": ["", "", "", ""],  # No prefix for navigational
+    }
     
     def __init__(
         self,
@@ -110,21 +121,25 @@ class LabelGenerator:
         if not clusters:
             return LabelingResult()
         
-        # Phase 1: Generate summaries
+        # Phase 1: Analyze all clusters
         if progress_callback:
-            progress_callback("labeling", 0.1, "Phase 1: Generating summaries...")
+            progress_callback("labeling", 0.1, "Analyzing clusters...")
         
-        summaries = await self._generate_summaries(
-            clusters,
-            progress_callback
-        )
+        cluster_analyses = self._analyze_clusters(clusters)
         
-        # Phase 2: Generate consistent labels
+        # Phase 2: Try LLM labeling
         if progress_callback:
-            progress_callback("labeling", 0.6, "Phase 2: Generating labels...")
+            progress_callback("labeling", 0.3, "Generating labels with AI...")
         
-        labels = await self._generate_consistent_labels(
-            summaries,
+        llm_labels = await self._generate_llm_labels(cluster_analyses)
+        
+        # Phase 3: Build final labels with smart fallback
+        if progress_callback:
+            progress_callback("labeling", 0.8, "Finalizing labels...")
+        
+        labels = self._build_final_labels(
+            cluster_analyses,
+            llm_labels,
             clusters
         )
         
@@ -139,161 +154,392 @@ class LabelGenerator:
             consistency_score=consistency
         )
     
-    async def _generate_summaries(
+    def _analyze_clusters(
         self,
-        clusters: Dict[int, dict],
-        progress_callback: Callable = None
+        clusters: Dict[int, dict]
     ) -> List[dict]:
-        """Generate summaries for all clusters."""
-        summaries = []
-        total = len(clusters)
+        """Analyze all clusters for labeling."""
+        analyses = []
         
-        for i, (cluster_id, data) in enumerate(clusters.items()):
+        for cluster_id, data in clusters.items():
             keywords = data.get("keywords", [])
             top_keywords = data.get("top_keywords", keywords[:10])
-            serp_data = data.get("serp_data")
             
             # Classify intent
             intent = self.intent_classifier.classify_cluster(keywords)
             
-            # Generate summary prompt
-            prompt = format_cluster_summary_prompt(
-                keywords=keywords,
-                intent_type=intent.primary_intent.value,
-                top_keywords=top_keywords,
-                serp_data=serp_data
-            )
+            # Extract key themes
+            theme = self._extract_theme(keywords, top_keywords)
             
-            # Get LLM summary
-            try:
-                summary = await self.llm_client.generate(
-                    prompt=prompt,
-                    max_tokens=200
-                )
-            except Exception as e:
-                summary = f"Cluster of {len(keywords)} keywords"
-            
-            summaries.append({
+            analyses.append({
                 "cluster_id": cluster_id,
-                "summary": summary.strip(),
+                "keywords": keywords,
+                "top_keywords": top_keywords[:5],
                 "intent": intent,
+                "theme": theme,
                 "keyword_count": len(keywords)
             })
-            
-            if progress_callback:
-                progress = 0.1 + (0.5 * (i + 1) / total)
-                progress_callback(
-                    "labeling",
-                    progress,
-                    f"Summarized {i + 1}/{total} clusters"
-                )
         
-        return summaries
+        return analyses
     
-    async def _generate_consistent_labels(
+    def _extract_theme(
         self,
-        summaries: List[dict],
-        clusters: Dict[int, dict]
-    ) -> Dict[int, ClusterLabel]:
-        """Generate consistent labels using global context."""
-        # Build the consistent labeling prompt
-        prompt = format_consistent_labeling_prompt(
-            cluster_summaries=summaries,
-            n_clusters=len(summaries)
-        )
+        keywords: List[str],
+        top_keywords: List[str]
+    ) -> str:
+        """
+        Extract main theme from keywords.
+        Uses word frequency analysis.
+        """
+        # Combine all keywords
+        all_text = " ".join(keywords[:50])  # Use first 50 for efficiency
         
-        # Single LLM call for all labels
+        # Tokenize and count (simple approach)
+        words = re.findall(r'\b[a-z]{3,}\b', all_text.lower())
+        
+        # Remove common stopwords
+        stopwords = {
+            'the', 'and', 'for', 'are', 'with', 'you', 'this', 'that',
+            'from', 'have', 'your', 'what', 'how', 'why', 'when', 'where',
+            'can', 'will', 'all', 'best', 'top', 'get', 'make', 'use',
+            'does', 'has', 'was', 'were', 'been', 'being', 'more', 'most'
+        }
+        words = [w for w in words if w not in stopwords]
+        
+        # Get most common words
+        word_counts = Counter(words)
+        common = word_counts.most_common(3)
+        
+        if common:
+            # Build theme from top words
+            theme_words = [w[0] for w in common]
+            return " ".join(theme_words[:2]).title()
+        
+        # Fallback: use first top keyword
+        if top_keywords:
+            first_kw = top_keywords[0] if top_keywords else ""
+            # Capitalize words
+            return " ".join(w.capitalize() for w in first_kw.split()[:3])
+        
+        return ""
+    
+    async def _generate_llm_labels(
+        self,
+        analyses: List[dict]
+    ) -> Dict[int, str]:
+        """Try to generate labels using LLM."""
+        labels = {}
+        
+        # Build prompt with all cluster summaries
+        prompt = self._build_labeling_prompt(analyses)
+        
         try:
             response = await self.llm_client.generate(
                 prompt=prompt,
-                max_tokens=1000
+                max_tokens=2000,
+                temperature=0.3
             )
             
-            # Parse JSON response
-            labels_data = self._parse_labels_response(response)
+            # Parse response
+            labels = self._parse_llm_response(response, analyses)
+            
         except Exception as e:
-            # Fallback: generate simple labels
-            labels_data = self._generate_fallback_labels(summaries)
+            # LLM failed - will use fallback
+            print(f"LLM labeling failed: {e}")
         
-        # Build ClusterLabel objects
+        return labels
+    
+    def _build_labeling_prompt(self, analyses: List[dict]) -> str:
+        """Build the LLM prompt for labeling."""
+        cluster_summaries = []
+        
+        for a in analyses:
+            intent_type = a["intent"].primary_intent.value
+            keywords_sample = ", ".join(a["top_keywords"][:5])
+            
+            cluster_summaries.append(
+                f"Cluster {a['cluster_id']} ({a['keyword_count']} keywords):\n"
+                f"  Intent: {intent_type}\n"
+                f"  Theme: {a['theme']}\n"
+                f"  Sample: {keywords_sample}"
+            )
+        
+        prompt = f"""You are an SEO expert creating cluster labels for keyword research.
+
+TASK: Create a short, descriptive label (2-5 words) for each cluster.
+
+RULES:
+1. Labels must be SPECIFIC and DESCRIPTIVE (not generic like "Cluster 1")
+2. Labels must reflect USER INTENT:
+   - Informational: Use "Guide:", "How-To:", "Understanding:" prefix
+   - Transactional: Use "Buy:", "Shop:", "Get:" prefix  
+   - Commercial: Use "Best:", "Reviews:", "Compare:" prefix
+   - Navigational: Use brand/product name directly
+3. Labels must be UNIQUE (no duplicates)
+4. Use Title Case formatting
+
+CLUSTERS TO LABEL:
+{chr(10).join(cluster_summaries)}
+
+OUTPUT FORMAT (JSON only, no other text):
+{{
+  "labels": [
+    {{"cluster_id": 0, "label": "Your Label Here"}},
+    {{"cluster_id": 1, "label": "Another Label"}}
+  ]
+}}
+
+JSON Response:"""
+        
+        return prompt
+    
+    def _parse_llm_response(
+        self,
+        response: str,
+        analyses: List[dict]
+    ) -> Dict[int, str]:
+        """Parse LLM response and extract labels."""
         labels = {}
-        summary_map = {s["cluster_id"]: s for s in summaries}
         
-        for label_info in labels_data:
-            cluster_id = label_info["cluster_id"]
-            summary_data = summary_map.get(cluster_id, {})
+        # Try multiple JSON extraction strategies
+        json_data = None
+        
+        # Strategy 1: Direct JSON parse
+        try:
+            json_data = json.loads(response.strip())
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 2: Find JSON object in response
+        if not json_data:
+            try:
+                # Find content between first { and last }
+                start = response.find("{")
+                end = response.rfind("}") + 1
+                if start >= 0 and end > start:
+                    json_str = response[start:end]
+                    json_data = json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 3: Find JSON array
+        if not json_data:
+            try:
+                start = response.find("[")
+                end = response.rfind("]") + 1
+                if start >= 0 and end > start:
+                    json_str = response[start:end]
+                    arr = json.loads(json_str)
+                    json_data = {"labels": arr}
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 4: Line-by-line extraction
+        if not json_data:
+            json_data = self._extract_labels_from_text(response, analyses)
+        
+        # Extract labels from parsed data
+        if json_data and "labels" in json_data:
+            for item in json_data["labels"]:
+                cid = item.get("cluster_id")
+                label = item.get("label", "")
+                
+                # Validate label
+                if cid is not None and label and len(label) > 2:
+                    # Clean up label
+                    label = label.strip().strip('"').strip("'")
+                    if not self._is_generic_label(label):
+                        labels[cid] = label
+        
+        return labels
+    
+    def _extract_labels_from_text(
+        self,
+        response: str,
+        analyses: List[dict]
+    ) -> Optional[dict]:
+        """Extract labels from non-JSON text response."""
+        labels_list = []
+        
+        # Try to find patterns like "Cluster 0: Label" or "0. Label"
+        patterns = [
+            r'[Cc]luster\s*(\d+)[:\s]+["\']?([^"\'\n,]+)["\']?',
+            r'(\d+)[.)\s]+["\']?([^"\'\n,]+)["\']?',
+            r'"cluster_id":\s*(\d+)[^"]*"label":\s*"([^"]+)"',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response)
+            if matches:
+                for match in matches:
+                    cid = int(match[0])
+                    label = match[1].strip()
+                    if label and len(label) > 2:
+                        labels_list.append({
+                            "cluster_id": cid,
+                            "label": label
+                        })
+                break
+        
+        if labels_list:
+            return {"labels": labels_list}
+        return None
+    
+    def _is_generic_label(self, label: str) -> bool:
+        """Check if label is too generic."""
+        generic_patterns = [
+            r'^cluster\s*\d*$',
+            r'^cluster\s+of\s+\d+',
+            r'^group\s*\d*$',
+            r'^category\s*\d*$',
+            r'^misc',
+            r'^other',
+            r'^\d+\s+keywords?',
+        ]
+        
+        label_lower = label.lower().strip()
+        for pattern in generic_patterns:
+            if re.match(pattern, label_lower):
+                return True
+        return False
+    
+    def _build_final_labels(
+        self,
+        analyses: List[dict],
+        llm_labels: Dict[int, str],
+        clusters: Dict[int, dict]
+    ) -> Dict[int, ClusterLabel]:
+        """Build final labels with smart fallback."""
+        labels = {}
+        used_labels = set()  # Track to avoid duplicates
+        
+        for analysis in analyses:
+            cluster_id = analysis["cluster_id"]
+            intent = analysis["intent"]
+            
+            # Try LLM label first
+            label_text = llm_labels.get(cluster_id)
+            
+            # If no LLM label or it's generic, use smart fallback
+            if not label_text or self._is_generic_label(label_text):
+                label_text = self._generate_smart_fallback(
+                    analysis,
+                    used_labels
+                )
+            
+            # Ensure uniqueness
+            original_label = label_text
+            counter = 1
+            while label_text.lower() in used_labels:
+                counter += 1
+                label_text = f"{original_label} {counter}"
+            
+            used_labels.add(label_text.lower())
+            
+            # Determine confidence
+            confidence = 0.9 if cluster_id in llm_labels else 0.7
             
             labels[cluster_id] = ClusterLabel(
                 cluster_id=cluster_id,
-                label=label_info["label"],
-                confidence=label_info.get("confidence", 0.8),
-                intent=summary_data.get("intent", IntentResult(
-                    primary_intent=IntentClassifier().classify_keyword(
-                        label_info["label"]
-                    ).primary_intent,
-                    confidence=0.5,
-                    modifiers=[]
-                )),
-                summary=summary_data.get("summary", "")
+                label=label_text,
+                confidence=confidence,
+                intent=intent,
+                summary=analysis.get("theme", "")
             )
         
         return labels
     
-    def _parse_labels_response(self, response: str) -> List[dict]:
-        """Parse LLM response to extract labels."""
-        # Try to extract JSON
-        try:
-            # Find JSON in response
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            
-            if start >= 0 and end > start:
-                json_str = response[start:end]
-                data = json.loads(json_str)
-                
-                if "labels" in data:
-                    return data["labels"]
-        except json.JSONDecodeError:
-            pass
-        
-        # Try array format
-        try:
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            
-            if start >= 0 and end > start:
-                json_str = response[start:end]
-                return json.loads(json_str)
-        except json.JSONDecodeError:
-            pass
-        
-        return []
-    
-    def _generate_fallback_labels(
+    def _generate_smart_fallback(
         self,
-        summaries: List[dict]
-    ) -> List[dict]:
-        """Generate fallback labels when LLM fails."""
-        labels = []
+        analysis: dict,
+        used_labels: set
+    ) -> str:
+        """
+        Generate a smart fallback label based on:
+        1. Intent type + theme
+        2. Top keywords analysis
+        """
+        intent_type = analysis["intent"].primary_intent.value.lower()
+        theme = analysis.get("theme", "")
+        top_keywords = analysis.get("top_keywords", [])
+        keywords = analysis.get("keywords", [])
         
-        for summary in summaries:
-            cluster_id = summary["cluster_id"]
-            text = summary.get("summary", "")
+        # Strategy 1: Intent prefix + Theme
+        if theme and len(theme) > 2:
+            prefixes = self.INTENT_PREFIXES.get(intent_type, [""])
+            prefix = prefixes[0] if prefixes[0] else ""
             
-            # Extract key phrase from summary
-            words = text.split()[:3] if text else []
-            label = " ".join(words).title() if words else f"Cluster {cluster_id}"
+            label = f"{prefix} {theme}".strip() if prefix else theme
             
-            # Clean up label
-            label = label.replace(".", "").replace(",", "")[:50]
-            
-            labels.append({
-                "cluster_id": cluster_id,
-                "label": label,
-                "confidence": 0.5
-            })
+            if label.lower() not in used_labels:
+                return label
         
-        return labels
+        # Strategy 2: Use top keyword directly
+        if top_keywords:
+            # Find best keyword (not too long, not too short)
+            for kw in top_keywords[:5]:
+                if isinstance(kw, str) and 3 <= len(kw.split()) <= 5:
+                    label = " ".join(
+                        w.capitalize() for w in kw.split()[:4]
+                    )
+                    if label.lower() not in used_labels:
+                        return label
+        
+        # Strategy 3: Extract common phrase from keywords
+        common_phrase = self._find_common_phrase(keywords[:20])
+        if common_phrase:
+            label = " ".join(
+                w.capitalize() for w in common_phrase.split()[:4]
+            )
+            if label.lower() not in used_labels:
+                return label
+        
+        # Strategy 4: First keyword capitalized
+        if top_keywords:
+            first_kw = top_keywords[0]
+            if isinstance(first_kw, str):
+                words = first_kw.split()[:4]
+                label = " ".join(w.capitalize() for w in words)
+                if label.lower() not in used_labels:
+                    return label
+        
+        # Strategy 5: Theme + count (last resort, but still descriptive)
+        if theme:
+            return f"{theme} Topics"
+        
+        # Final fallback using first keyword
+        if keywords:
+            first = keywords[0] if isinstance(keywords[0], str) else ""
+            return " ".join(w.capitalize() for w in first.split()[:3])
+        
+        return f"Topic Group {analysis['cluster_id']}"
+    
+    def _find_common_phrase(self, keywords: List[str]) -> Optional[str]:
+        """Find common 2-3 word phrase across keywords."""
+        if not keywords:
+            return None
+        
+        # Extract 2-grams and 3-grams
+        ngrams = []
+        for kw in keywords:
+            if isinstance(kw, str):
+                words = kw.lower().split()
+                for n in [2, 3]:
+                    for i in range(len(words) - n + 1):
+                        ngram = " ".join(words[i:i+n])
+                        ngrams.append(ngram)
+        
+        if not ngrams:
+            return None
+        
+        # Find most common
+        ngram_counts = Counter(ngrams)
+        common = ngram_counts.most_common(1)
+        
+        if common and common[0][1] >= 3:  # Appears at least 3 times
+            return common[0][0]
+        
+        return None
     
     def _calculate_consistency(
         self,
@@ -309,27 +555,12 @@ class LabelGenerator:
         unique_count = len(set(label_texts))
         uniqueness_score = unique_count / len(label_texts)
         
-        # Check grammatical consistency
-        structures = []
-        for label in label_texts:
-            words = label.split()
-            if len(words) > 0:
-                # Simple structure detection
-                structure = (
-                    "question" if words[0].lower() in [
-                        "how", "what", "why", "when", "where"
-                    ]
-                    else "noun" if words[0][0].isupper()
-                    else "other"
-                )
-                structures.append(structure)
-        
-        if structures:
-            from collections import Counter
-            most_common = Counter(structures).most_common(1)[0]
-            consistency_score = most_common[1] / len(structures)
-        else:
-            consistency_score = 0.5
+        # Check for generic labels (should be 0)
+        generic_count = sum(
+            1 for lbl in label_texts
+            if self._is_generic_label(lbl)
+        )
+        generic_penalty = 1 - (generic_count / len(label_texts))
         
         # Check label length consistency
         lengths = [len(lbl.split()) for lbl in label_texts]
@@ -345,8 +576,8 @@ class LabelGenerator:
         # Weighted average
         return (
             uniqueness_score * 0.4 +
-            consistency_score * 0.3 +
-            length_score * 0.3
+            generic_penalty * 0.4 +
+            length_score * 0.2
         )
     
     async def generate_descriptions(
@@ -366,26 +597,13 @@ class LabelGenerator:
         """
         for cluster_id, label in labels.items():
             cluster_data = clusters.get(cluster_id, {})
-            
             keywords = cluster_data.get("keywords", [])
-            metrics = cluster_data.get("metrics", {})
             
-            prompt = format_description_prompt(
-                label=label.label,
-                sample_keywords=keywords[:15],
-                count=len(keywords),
-                total_volume=metrics.get("total_volume", 0),
-                avg_difficulty=metrics.get("avg_difficulty", 50),
-                intent=label.intent.primary_intent.value
+            # Generate simple description without LLM
+            intent_type = label.intent.primary_intent.value
+            label.description = (
+                f"{intent_type.capitalize()} content cluster "
+                f"with {len(keywords)} keywords."
             )
-            
-            try:
-                description = await self.llm_client.generate(
-                    prompt=prompt,
-                    max_tokens=200
-                )
-                label.description = description.strip()
-            except Exception:
-                label.description = f"Cluster containing {len(keywords)} keywords"
         
         return labels

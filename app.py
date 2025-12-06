@@ -153,22 +153,30 @@ def render_sidebar():
             "Min Cluster Size",
             min_value=2,
             max_value=20,
-            value=5
+            value=3,  # Lowered from 5 for better coverage
+            help="Smaller values create more clusters (fewer outliers)"
         )
         
         serp_validation = st.checkbox(
             "Enable SERP Validation",
-            value=True,
-            help="Validate clusters using SERP overlap"
+            value=False,  # Disabled by default - uses API credits
+            help="Validate clusters using SERP overlap (uses Serper API)"
         )
         
         similarity_threshold = st.slider(
-            "Similarity Threshold",
-            min_value=0.5,
-            max_value=0.95,
-            value=0.7,
+            "Outlier Reassignment Threshold",
+            min_value=0.25,
+            max_value=0.80,
+            value=0.55,  # Lowered from 0.7 for better coverage
             step=0.05,
-            help="Threshold for outlier reassignment"
+            help="Lower = more keywords assigned (aggressive). "
+                 "0.55 recommended for 90%+ cluster rate."
+        )
+        
+        aggressive_mode = st.checkbox(
+            "Aggressive Outlier Handling",
+            value=True,
+            help="Multi-pass outlier assignment for maximum coverage"
         )
     
     return {
@@ -177,7 +185,8 @@ def render_sidebar():
         "llm_model": selected_model,
         "min_cluster_size": min_cluster_size,
         "serp_validation": serp_validation,
-        "similarity_threshold": similarity_threshold
+        "similarity_threshold": similarity_threshold,
+        "aggressive_mode": aggressive_mode
     }
 
 
@@ -341,8 +350,8 @@ def render_validation_section():
     st.markdown("---")
 
 
-async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
-    """Fetch metrics from DataForSEO."""
+def fetch_metrics_sync(keywords_data: list, config: dict, progress_bar):
+    """Fetch metrics from DataForSEO (synchronous)."""
     settings = Settings()
     
     # Debug: Show credentials status (redacted)
@@ -378,7 +387,7 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
                 text=f"Fetching metrics: {current:,}/{total:,}"
             )
         
-        new_metrics = await dataforseo.get_keyword_metrics(
+        new_metrics = dataforseo.get_keyword_metrics(
             keywords=uncached,
             location_code=location_code,
             language_code=language_code,
@@ -473,9 +482,7 @@ def render_enrichment_section(config: dict):
             progress_bar = st.progress(0, text="Starting...")
             
             try:
-                enriched = asyncio.run(
-                    fetch_metrics_async(keywords, config, progress_bar)
-                )
+                enriched = fetch_metrics_sync(keywords, config, progress_bar)
                 st.session_state.keywords_enriched = enriched
                 st.session_state.metrics_fetched = True
                 st.session_state.fetching_metrics = False
@@ -553,9 +560,14 @@ async def run_clustering(
         status_text.markdown("🎯 **Clustering keywords...**")
         
         coarse = CoarseClusterer()
-        fine = FineClusterer(min_cluster_size=config["min_cluster_size"])
+        fine = FineClusterer(
+            min_cluster_size=config["min_cluster_size"],
+            min_samples=2,  # Lowered for better coverage
+            cluster_selection_method="leaf"  # More clusters, fewer outliers
+        )
         outlier = OutlierHandler(
-            similarity_threshold=config["similarity_threshold"]
+            similarity_threshold=config["similarity_threshold"],
+            aggressive_mode=config.get("aggressive_mode", True)
         )
         
         serp_val = None

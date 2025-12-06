@@ -1,6 +1,6 @@
 """
 Outlier handling and reassignment.
-Minimizes unclustered keywords.
+Minimizes unclustered keywords through aggressive multi-pass reassignment.
 """
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -22,26 +22,31 @@ class OutlierReassignment:
 class OutlierHandler:
     """
     Handles outlier reassignment to reduce unclustered keywords.
-    Uses cosine similarity to find best cluster matches.
+    Uses cosine similarity with multi-pass strategy for maximum coverage.
+    
+    Target: <10% unclustered keywords
     """
     
     def __init__(
         self,
-        similarity_threshold: float = 0.7,
-        confidence_thresholds: Dict[str, float] = None
+        similarity_threshold: float = 0.55,  # Lowered from 0.7
+        confidence_thresholds: Dict[str, float] = None,
+        aggressive_mode: bool = True  # Enable multi-pass
     ):
         """
         Initialize outlier handler.
         
         Args:
-            similarity_threshold: Minimum similarity for reassignment
+            similarity_threshold: Minimum similarity for reassignment (default lowered)
             confidence_thresholds: Thresholds for confidence levels
+            aggressive_mode: Use multi-pass strategy for better coverage
         """
         self.similarity_threshold = similarity_threshold
+        self.aggressive_mode = aggressive_mode
         self.confidence_thresholds = confidence_thresholds or {
-            "high": 0.85,
-            "medium": 0.75,
-            "low": 0.65
+            "high": 0.75,
+            "medium": 0.6,
+            "low": 0.45
         }
     
     def reassign_outliers(
@@ -51,7 +56,12 @@ class OutlierHandler:
         centroids: np.ndarray = None
     ) -> Tuple[np.ndarray, List[OutlierReassignment]]:
         """
-        Reassign outliers to nearest clusters.
+        Reassign outliers to nearest clusters using multi-pass strategy.
+        
+        Pass 1: High confidence (>= 0.55)
+        Pass 2: Medium confidence (>= 0.45)
+        Pass 3: Low confidence (>= 0.35)
+        Pass 4: Force assign remaining (>= 0.25) if aggressive mode
         
         Args:
             embeddings: All keyword embeddings
@@ -62,53 +72,69 @@ class OutlierHandler:
             Tuple of (new_labels, list of reassignments)
         """
         new_labels = labels.copy()
-        reassignments = []
-        
-        # Find outlier indices
-        outlier_indices = np.where(labels == -1)[0]
-        
-        if len(outlier_indices) == 0:
-            return new_labels, reassignments
+        all_reassignments = []
         
         # Get unique cluster IDs (excluding outliers)
         cluster_ids = np.unique(labels[labels >= 0])
         
         if len(cluster_ids) == 0:
-            return new_labels, reassignments
+            return new_labels, all_reassignments
         
         # Compute centroids if not provided
-        if centroids is None:
+        if centroids is None or len(centroids) == 0:
             centroids = self._compute_centroids(embeddings, labels, cluster_ids)
         
-        # Get outlier embeddings
-        outlier_embeddings = embeddings[outlier_indices]
+        # Define threshold passes
+        if self.aggressive_mode:
+            threshold_passes = [
+                (self.similarity_threshold, "high"),      # Pass 1: 0.55
+                (0.45, "medium"),                          # Pass 2: 0.45
+                (0.35, "low"),                             # Pass 3: 0.35
+                (0.25, "low"),                             # Pass 4: Final sweep
+            ]
+        else:
+            threshold_passes = [(self.similarity_threshold, "medium")]
         
-        # Calculate similarity to all centroids
-        similarities = cosine_similarity(outlier_embeddings, centroids)
-        
-        for i, outlier_idx in enumerate(outlier_indices):
-            # Find best matching cluster
-            best_cluster_local = np.argmax(similarities[i])
-            best_similarity = similarities[i, best_cluster_local]
-            best_cluster = cluster_ids[best_cluster_local]
+        for threshold, _ in threshold_passes:
+            # Find current outliers
+            outlier_indices = np.where(new_labels == -1)[0]
             
-            if best_similarity >= self.similarity_threshold:
-                # Reassign to this cluster
-                new_labels[outlier_idx] = best_cluster
+            if len(outlier_indices) == 0:
+                break  # All assigned
+            
+            # Update centroids with newly assigned keywords
+            cluster_ids = np.unique(new_labels[new_labels >= 0])
+            centroids = self._compute_centroids(embeddings, new_labels, cluster_ids)
+            
+            # Get outlier embeddings
+            outlier_embeddings = embeddings[outlier_indices]
+            
+            # Calculate similarity to all centroids
+            similarities = cosine_similarity(outlier_embeddings, centroids)
+            
+            for i, outlier_idx in enumerate(outlier_indices):
+                # Find best matching cluster
+                best_cluster_local = np.argmax(similarities[i])
+                best_similarity = float(similarities[i, best_cluster_local])
+                best_cluster = int(cluster_ids[best_cluster_local])
                 
-                # Determine confidence
-                confidence = self._get_confidence(best_similarity)
-                
-                reassignment = OutlierReassignment(
-                    keyword_index=outlier_idx,
-                    original_cluster=-1,
-                    new_cluster=best_cluster,
-                    similarity=best_similarity,
-                    confidence=confidence
-                )
-                reassignments.append(reassignment)
+                if best_similarity >= threshold:
+                    # Reassign to this cluster
+                    new_labels[outlier_idx] = best_cluster
+                    
+                    # Determine confidence
+                    confidence = self._get_confidence(best_similarity)
+                    
+                    reassignment = OutlierReassignment(
+                        keyword_index=int(outlier_idx),
+                        original_cluster=-1,
+                        new_cluster=best_cluster,
+                        similarity=best_similarity,
+                        confidence=confidence
+                    )
+                    all_reassignments.append(reassignment)
         
-        return new_labels, reassignments
+        return new_labels, all_reassignments
     
     def _compute_centroids(
         self,

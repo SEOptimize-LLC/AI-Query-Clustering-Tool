@@ -44,22 +44,23 @@ class FineClusterer:
     """
     Second-stage clustering using HDBSCAN.
     Automatically determines number of clusters and identifies outliers.
+    Optimized for maximum coverage (minimize outliers).
     """
     
     def __init__(
         self,
-        min_cluster_size: int = 5,
-        min_samples: int = 3,
-        cluster_selection_method: str = "eom",
+        min_cluster_size: int = 3,  # Lowered from 5
+        min_samples: int = 2,       # Lowered from 3
+        cluster_selection_method: str = "leaf",  # Changed from "eom"
         metric: str = "euclidean"
     ):
         """
         Initialize fine clusterer.
         
         Args:
-            min_cluster_size: Minimum keywords for a cluster
-            min_samples: Samples for core point determination
-            cluster_selection_method: "eom" or "leaf"
+            min_cluster_size: Minimum keywords for a cluster (default: 3)
+            min_samples: Samples for core point (default: 2)
+            cluster_selection_method: "leaf" for more clusters, less outliers
             metric: Distance metric
         """
         self.min_cluster_size = min_cluster_size
@@ -161,6 +162,7 @@ class FineClusterer:
     ) -> Dict[str, int]:
         """
         Suggest adaptive parameters based on dataset size.
+        Optimized for maximum coverage (fewer outliers).
         
         Args:
             n_keywords: Number of keywords in cluster
@@ -170,21 +172,21 @@ class FineClusterer:
         """
         if n_keywords < 50:
             return {
-                "min_cluster_size": 3,
-                "min_samples": 2
+                "min_cluster_size": 2,
+                "min_samples": 1
             }
         elif n_keywords < 200:
             return {
-                "min_cluster_size": 5,
-                "min_samples": 3
+                "min_cluster_size": 3,
+                "min_samples": 2
             }
         elif n_keywords < 1000:
             return {
-                "min_cluster_size": 8,
-                "min_samples": 4
+                "min_cluster_size": 4,
+                "min_samples": 2
             }
         else:
             return {
-                "min_cluster_size": 10,
-                "min_samples": 5
+                "min_cluster_size": 5,
+                "min_samples": 3
             }
