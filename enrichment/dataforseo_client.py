@@ -1,10 +1,11 @@
 """
 DataForSEO API client for keyword metrics.
+Uses synchronous requests to avoid Streamlit event loop conflicts.
 """
 import streamlit as st
-import asyncio
-import aiohttp
+import requests
 import base64
+import time
 from typing import List, Dict, Optional, Callable
 from dataclasses import dataclass
 
@@ -26,6 +27,7 @@ class DataForSEOClient:
     """
     Client for DataForSEO Keywords Data API.
     Fetches search volume and keyword difficulty.
+    Uses synchronous requests for Streamlit compatibility.
     """
     
     BASE_URL = "https://api.dataforseo.com/v3"
@@ -56,7 +58,7 @@ class DataForSEOClient:
         """Check if API credentials are configured."""
         return bool(self.login and self.password)
     
-    async def get_keyword_metrics(
+    def get_keyword_metrics(
         self,
         keywords: List[str],
         location_code: int = 2840,
@@ -64,13 +66,13 @@ class DataForSEOClient:
         progress_callback: Callable = None
     ) -> Dict[str, KeywordMetrics]:
         """
-        Fetch search volume and difficulty for keywords.
+        Fetch search volume and difficulty for keywords (synchronous).
         
         Args:
             keywords: List of keywords
             location_code: DataForSEO location code (default: US)
             language_code: Language code
-            progress_callback: Optional callback for progress updates
+            progress_callback: Optional callback(current, total)
         
         Returns:
             Dict mapping keyword -> KeywordMetrics
@@ -84,51 +86,50 @@ class DataForSEOClient:
         results = {}
         total_batches = (len(keywords) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
         
-        async with aiohttp.ClientSession() as session:
-            for i, batch_start in enumerate(
-                range(0, len(keywords), self.BATCH_SIZE)
-            ):
-                batch = keywords[batch_start:batch_start + self.BATCH_SIZE]
-                
-                try:
-                    batch_results = await self._fetch_batch(
-                        session,
-                        batch,
-                        location_code,
-                        language_code
-                    )
-                    results.update(batch_results)
-                except Exception as e:
-                    # Log error but continue with other batches
-                    st.warning(f"Batch {i+1} failed: {e}")
-                
-                if progress_callback:
-                    progress_callback(
-                        min(batch_start + self.BATCH_SIZE, len(keywords)),
-                        len(keywords)
-                    )
-                
-                # Small delay between batches to avoid rate limits
-                if i < total_batches - 1:
-                    await asyncio.sleep(0.5)
+        for i, batch_start in enumerate(
+            range(0, len(keywords), self.BATCH_SIZE)
+        ):
+            batch = keywords[batch_start:batch_start + self.BATCH_SIZE]
+            
+            try:
+                batch_results = self._fetch_batch(
+                    batch,
+                    location_code,
+                    language_code,
+                    is_first_batch=(i == 0)
+                )
+                results.update(batch_results)
+            except Exception as e:
+                # Log error but continue with other batches
+                st.warning(f"Batch {i+1} failed: {e}")
+            
+            if progress_callback:
+                progress_callback(
+                    min(batch_start + self.BATCH_SIZE, len(keywords)),
+                    len(keywords)
+                )
+            
+            # Small delay between batches to avoid rate limits
+            if i < total_batches - 1:
+                time.sleep(0.5)
         
         return results
     
-    async def _fetch_batch(
+    def _fetch_batch(
         self,
-        session: aiohttp.ClientSession,
         keywords: List[str],
         location_code: int,
-        language_code: str
+        language_code: str,
+        is_first_batch: bool = False
     ) -> Dict[str, KeywordMetrics]:
         """
-        Fetch metrics for a single batch of keywords.
+        Fetch metrics for a single batch of keywords (synchronous).
         
         Args:
-            session: aiohttp session
             keywords: Batch of keywords
             location_code: Location code
             language_code: Language code
+            is_first_batch: Whether to show debug info
         
         Returns:
             Dict mapping keyword -> KeywordMetrics
@@ -146,32 +147,27 @@ class DataForSEOClient:
             "Content-Type": "application/json"
         }
         
-        async with session.post(
-            url,
-            json=payload,
-            headers=headers
-        ) as response:
-            if response.status == 429:
-                raise RateLimitError(
-                    service="DataForSEO",
-                    retry_after=60
-                )
-            
-            text = await response.text()
-            
-            if response.status != 200:
-                raise APIError(
-                    f"DataForSEO API error: {text}",
-                    service="DataForSEO",
-                    status_code=response.status,
-                    response=text
-                )
-            
-            import json
-            data = json.loads(text)
-            
-            # Debug: Show full response for first batch
-            st.caption(f"🔧 HTTP Status: {response.status}")
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        
+        if response.status_code == 429:
+            raise RateLimitError(
+                service="DataForSEO",
+                retry_after=60
+            )
+        
+        if response.status_code != 200:
+            raise APIError(
+                f"DataForSEO API error: {response.text}",
+                service="DataForSEO",
+                status_code=response.status_code,
+                response=response.text
+            )
+        
+        data = response.json()
+        
+        # Debug: Show full response for first batch
+        if is_first_batch:
+            st.caption(f"🔧 HTTP Status: {response.status_code}")
             st.caption(f"🔧 API status_code: {data.get('status_code')}")
             st.caption(f"🔧 API status_message: {data.get('status_message')}")
             
@@ -189,9 +185,9 @@ class DataForSEOClient:
                     st.caption(f"🔧 First kw: {first.get('keyword')} vol: {first.get('search_volume')}")
             else:
                 st.caption(f"🔧 No tasks in response!")
-                st.caption(f"🔧 Full response (first 500 chars): {text[:500]}")
-            
-            return self._parse_response(data)
+                st.caption(f"🔧 Full response (first 500 chars): {response.text[:500]}")
+        
+        return self._parse_response(data)
     
     def _parse_response(
         self,
@@ -226,30 +222,8 @@ class DataForSEOClient:
         
         return results
     
-    def get_metrics_sync(
-        self,
-        keywords: List[str],
-        location_code: int = 2840,
-        language_code: str = "en",
-        progress_callback: Callable = None
-    ) -> Dict[str, KeywordMetrics]:
-        """
-        Synchronous wrapper for get_keyword_metrics.
-        Use this in Streamlit (which has its own event loop).
-        """
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                self.get_keyword_metrics(
-                    keywords,
-                    location_code,
-                    language_code,
-                    progress_callback
-                )
-            )
-        finally:
-            loop.close()
+    # Alias for backward compatibility
+    get_metrics_sync = get_keyword_metrics
 
 
 def get_dataforseo_client() -> Optional[DataForSEOClient]:
