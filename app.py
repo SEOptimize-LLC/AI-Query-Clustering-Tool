@@ -385,6 +385,9 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
     """Fetch metrics from DataForSEO."""
     settings = Settings()
     
+    # Debug: Show credentials status (redacted)
+    st.caption(f"🔧 Debug: DataForSEO login: {settings.dataforseo_login[:3] if settings.dataforseo_login else 'NOT SET'}***")
+    
     supabase = SupabaseClient(settings.supabase_url, settings.supabase_key)
     cache = CacheManager(supabase)
     
@@ -393,6 +396,9 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
     # Check cache first
     cached_metrics = cache.get_keyword_metrics(keywords_text)
     uncached = [kw for kw in keywords_text if kw not in cached_metrics]
+    
+    # Debug: Show cache status
+    st.caption(f"🔧 Debug: {len(cached_metrics)} cached, {len(uncached)} to fetch from API")
     
     progress_bar.progress(0.1, text=f"Found {len(cached_metrics)} cached")
     
@@ -588,7 +594,9 @@ async def run_clustering(
         
         coarse = CoarseClusterer()
         fine = FineClusterer(min_cluster_size=config["min_cluster_size"])
-        outlier = OutlierHandler(threshold=config["similarity_threshold"])
+        outlier = OutlierHandler(
+            similarity_threshold=config["similarity_threshold"]
+        )
         
         serp_val = None
         if config["serp_validation"]:

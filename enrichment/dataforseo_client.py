@@ -167,6 +167,16 @@ class DataForSEOClient:
                 )
             
             data = await response.json()
+            
+            # Debug: Show response status
+            st.caption(f"🔧 API response status: {data.get('status_code')}")
+            tasks = data.get('tasks', []) or []
+            if tasks:
+                task = tasks[0]
+                st.caption(f"🔧 Task status: {task.get('status_code')} - {task.get('status_message')}")
+                result = task.get('result', []) or []
+                st.caption(f"🔧 Results count: {len(result)}")
+            
             return self._parse_response(data)
     
     def _parse_response(
