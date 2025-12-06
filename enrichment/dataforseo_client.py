@@ -184,10 +184,10 @@ class DataForSEOClient:
         """
         results = {}
         
-        tasks = data.get("tasks", [])
+        tasks = data.get("tasks", []) or []
         for task in tasks:
-            task_result = task.get("result", [])
-            for item in task_result:
+            task_result = task.get("result", []) or []
+            for item in task_result or []:
                 keyword = item.get("keyword", "")
                 if not keyword:
                     continue

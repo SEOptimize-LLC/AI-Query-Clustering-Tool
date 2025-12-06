@@ -405,10 +405,11 @@ async def fetch_metrics_async(keywords_data: list, config: dict, progress_bar):
         location_code = LOCATION_CODES.get(config["location"], 2840)
         language_code = LANGUAGE_CODES.get(config["language"], "en")
         
-        def update_progress(pct):
+        def update_progress(current, total):
+            pct = current / total if total > 0 else 0
             progress_bar.progress(
                 0.1 + pct * 0.8,
-                text=f"Fetching metrics: {int(pct*100)}%"
+                text=f"Fetching metrics: {current:,}/{total:,}"
             )
         
         new_metrics = await dataforseo.get_keyword_metrics(
