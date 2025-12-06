@@ -1,11 +1,13 @@
 """
-CSV parsing for keyword uploads.
-Supports any CSV format with column selection.
+CSV and Excel parsing for keyword uploads.
+Supports any format with column selection.
+Auto-detects delimiters (comma, semicolon, tab).
 """
 import pandas as pd
 import streamlit as st
 from typing import List, Dict, Tuple, Optional, Any
-from io import BytesIO, StringIO
+from io import BytesIO
+import csv
 
 from core.exceptions import ValidationError
 
@@ -44,40 +46,77 @@ class CSVParser:
         self.volume_column: Optional[str] = None
         self.kd_column: Optional[str] = None
     
+    def _detect_delimiter(
+        self,
+        file_content: BytesIO,
+        encoding: str
+    ) -> str:
+        """Auto-detect CSV delimiter."""
+        file_content.seek(0)
+        sample = file_content.read(8192).decode(encoding, errors='ignore')
+        file_content.seek(0)
+        
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
+            return dialect.delimiter
+        except csv.Error:
+            # Fallback: count occurrences
+            counts = {
+                ',': sample.count(','),
+                ';': sample.count(';'),
+                '\t': sample.count('\t'),
+                '|': sample.count('|')
+            }
+            return max(counts, key=counts.get)
+    
     def preview(
         self,
         file_content: BytesIO,
+        filename: str = "",
         encoding: str = "utf-8"
     ) -> Dict[str, Any]:
         """
-        Preview CSV file and return column information.
+        Preview CSV/Excel file and return column information.
         
         Args:
             file_content: File content as BytesIO
+            filename: Original filename to detect type
             encoding: File encoding (default: utf-8)
         
         Returns:
             Dict with columns, sample data, and auto-detected columns
         """
-        try:
-            for enc in [encoding, "utf-8", "latin-1", "cp1252"]:
-                try:
-                    file_content.seek(0)
-                    self.df = pd.read_csv(
-                        file_content,
-                        encoding=enc,
-                        low_memory=False,
-                        on_bad_lines='skip'  # Skip malformed rows
+        # Check if Excel file
+        if filename.endswith(('.xlsx', '.xls')):
+            try:
+                file_content.seek(0)
+                self.df = pd.read_excel(file_content)
+            except Exception as e:
+                raise ValidationError(f"Failed to read Excel: {str(e)}")
+        else:
+            # CSV parsing with delimiter detection
+            try:
+                for enc in [encoding, "utf-8", "latin-1", "cp1252"]:
+                    try:
+                        file_content.seek(0)
+                        delimiter = self._detect_delimiter(file_content, enc)
+                        file_content.seek(0)
+                        self.df = pd.read_csv(
+                            file_content,
+                            encoding=enc,
+                            sep=delimiter,
+                            low_memory=False,
+                            on_bad_lines='skip'
+                        )
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    raise ValidationError(
+                        "Could not decode file with any supported encoding"
                     )
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                raise ValidationError(
-                    "Could not decode file with any supported encoding"
-                )
-        except Exception as e:
-            raise ValidationError(f"Failed to read CSV: {str(e)}")
+            except Exception as e:
+                raise ValidationError(f"Failed to read CSV: {str(e)}")
         
         # Store original column names
         self.original_columns = list(self.df.columns)
@@ -205,25 +244,39 @@ class CSVParser:
             ValidationError: If parsing fails or no keyword column found
         """
         # Load the file with robust parsing
-        try:
-            for enc in [encoding, "utf-8", "latin-1", "cp1252"]:
-                try:
-                    file_content.seek(0)
-                    self.df = pd.read_csv(
-                        file_content,
-                        encoding=enc,
-                        low_memory=False,
-                        on_bad_lines='skip'
+        filename = getattr(file_content, 'name', '') or ''
+        
+        # Check if Excel file
+        if filename.endswith(('.xlsx', '.xls')):
+            try:
+                file_content.seek(0)
+                self.df = pd.read_excel(file_content)
+            except Exception as e:
+                raise ValidationError(f"Failed to read Excel: {str(e)}")
+        else:
+            # CSV with auto-delimiter detection
+            try:
+                for enc in [encoding, "utf-8", "latin-1", "cp1252"]:
+                    try:
+                        file_content.seek(0)
+                        delimiter = self._detect_delimiter(file_content, enc)
+                        file_content.seek(0)
+                        self.df = pd.read_csv(
+                            file_content,
+                            encoding=enc,
+                            sep=delimiter,
+                            low_memory=False,
+                            on_bad_lines='skip'
+                        )
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    raise ValidationError(
+                        "Could not decode file with any supported encoding"
                     )
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                raise ValidationError(
-                    "Could not decode file with any supported encoding"
-                )
-        except Exception as e:
-            raise ValidationError(f"Failed to parse CSV: {str(e)}")
+            except Exception as e:
+                raise ValidationError(f"Failed to parse CSV: {str(e)}")
         
         # Store original columns
         self.original_columns = list(self.df.columns)

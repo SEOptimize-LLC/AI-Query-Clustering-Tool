@@ -10,7 +10,7 @@ A Streamlit app for semantic keyword clustering with:
 import streamlit as st
 import asyncio
 import time
-from datetime import datetime
+from io import BytesIO
 
 # Page config must be first
 st.set_page_config(
@@ -27,7 +27,7 @@ from core.job_manager import JobManager
 from core.progress_tracker import ProgressTracker
 from storage.supabase_client import SupabaseClient
 from storage.cache_manager import CacheManager
-from ingestion.csv_parser import CSVParser, preview_uploaded_file
+from ingestion.csv_parser import CSVParser
 from ingestion.validator import KeywordValidator
 from ingestion.deduplicator import KeywordDeduplicator
 from enrichment.dataforseo_client import DataForSEOClient
@@ -186,9 +186,9 @@ def render_upload_section():
     
     with col1:
         uploaded_file = st.file_uploader(
-            "Upload CSV file with keywords",
-            type=["csv"],
-            help="Any CSV file - you'll select the keyword column"
+            "Upload CSV or Excel file with keywords",
+            type=["csv", "xlsx", "xls"],
+            help="Any CSV/Excel file - you'll select the keyword column"
         )
     
     with col2:
@@ -208,7 +208,12 @@ def render_upload_section():
         if (st.session_state.csv_preview is None or
                 st.session_state.get("file_key") != file_key):
             try:
-                parser, preview = preview_uploaded_file(uploaded_file)
+                parser = CSVParser()
+                content = BytesIO(uploaded_file.read())
+                preview = parser.preview(
+                    content,
+                    filename=uploaded_file.name
+                )
                 st.session_state.csv_preview = preview
                 st.session_state.csv_parser = parser
                 st.session_state.file_key = file_key
