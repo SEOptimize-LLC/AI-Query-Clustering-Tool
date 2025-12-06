@@ -58,16 +58,53 @@ class KeywordDeduplicator:
     
     def deduplicate(
         self,
-        keywords: List[str],
-        metrics: Dict[str, dict] = None
-    ) -> DeduplicationResult:
+        keywords_data: List[dict]
+    ) -> List[dict]:
         """
-        Deduplicate keywords.
+        Deduplicate keyword dictionaries.
         
         When duplicates have metrics, keeps the highest search volume.
         
         Args:
-            keywords: List of keywords
+            keywords_data: List of dicts with 'keyword' key
+        
+        Returns:
+            List of unique keyword dicts
+        """
+        # Track canonical form -> best dict (by search volume)
+        canonical_map: Dict[str, dict] = {}
+        
+        for kw_dict in keywords_data:
+            kw = kw_dict.get("keyword", "")
+            if not kw:
+                continue
+            
+            canonical = self._canonicalize(kw)
+            
+            if canonical not in canonical_map:
+                canonical_map[canonical] = kw_dict
+            else:
+                # Keep the one with higher search volume
+                current_vol = canonical_map[canonical].get(
+                    "search_volume", 0
+                )
+                new_vol = kw_dict.get("search_volume", 0)
+                
+                if new_vol > current_vol:
+                    canonical_map[canonical] = kw_dict
+        
+        return list(canonical_map.values())
+    
+    def deduplicate_strings(
+        self,
+        keywords: List[str],
+        metrics: Dict[str, dict] = None
+    ) -> DeduplicationResult:
+        """
+        Deduplicate string keywords (legacy method).
+        
+        Args:
+            keywords: List of keyword strings
             metrics: Optional dict mapping keyword -> metrics
         
         Returns:
@@ -94,7 +131,9 @@ class KeywordDeduplicator:
                 canonical_map[canonical].append(kw)
                 
                 # Keep the one with higher search volume
-                current_vol = merged_metrics[canonical].get("search_volume", 0)
+                current_vol = merged_metrics[canonical].get(
+                    "search_volume", 0
+                )
                 new_vol = metrics.get(kw, {}).get("search_volume", 0)
                 
                 if new_vol > current_vol:

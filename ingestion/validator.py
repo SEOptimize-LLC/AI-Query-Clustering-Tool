@@ -131,6 +131,33 @@ class KeywordValidator:
             warnings=warnings
         )
     
+    def validate_batch(
+        self,
+        keywords_data: List[dict]
+    ) -> Tuple[List[dict], List[dict]]:
+        """
+        Validate a list of keyword dictionaries.
+        
+        Args:
+            keywords_data: List of dicts with 'keyword' key
+        
+        Returns:
+            Tuple of (valid_keywords, invalid_keywords) as dicts
+        """
+        valid = []
+        invalid = []
+        
+        for kw_dict in keywords_data:
+            keyword = kw_dict.get("keyword", "")
+            is_valid, reason = self._validate_keyword(keyword)
+            
+            if is_valid:
+                valid.append(kw_dict)
+            else:
+                invalid.append(kw_dict)
+        
+        return valid, invalid
+    
     def _validate_keyword(self, keyword: str) -> Tuple[bool, str]:
         """
         Validate a single keyword.
