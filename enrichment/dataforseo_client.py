@@ -71,13 +71,21 @@ class DataForSEOClient:
             Sanitized keyword safe for API
         """
         # Replace problematic characters
-        # Keep alphanumeric, spaces, hyphens, and apostrophes
+        # Keep only: alphanumeric, spaces, hyphens, apostrophes
         import re
-        # Remove question marks, semicolons, commas, periods at end
+
         sanitized = keyword.strip()
-        sanitized = re.sub(r'[?;,]+', ' ', sanitized)  # Replace with space
+
+        # Remove parentheses, brackets, and their content
+        sanitized = re.sub(r'\([^)]*\)', '', sanitized)  # Remove (text)
+        sanitized = re.sub(r'\[[^\]]*\]', '', sanitized)  # Remove [text]
+
+        # Remove special punctuation
+        sanitized = re.sub(r'[?;,!]+', ' ', sanitized)  # Replace with space
         sanitized = re.sub(r'\.+$', '', sanitized)  # Remove trailing periods
-        sanitized = re.sub(r'\s+', ' ', sanitized)  # Normalize spaces
+
+        # Normalize whitespace
+        sanitized = re.sub(r'\s+', ' ', sanitized)
         sanitized = sanitized.strip()
 
         return sanitized if sanitized else keyword  # Fallback to original
