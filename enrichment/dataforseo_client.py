@@ -62,7 +62,9 @@ class DataForSEOClient:
     def sanitize_keyword(keyword: str) -> str:
         """
         Sanitize keyword for DataForSEO API.
-        Removes special characters that cause API errors.
+        Removes ALL special characters rejected by DataForSEO.
+
+        DataForSEO rejects: ", #, %, <, >, {, }, |, ^, ~, [, ], `, &, ?, =, +, /, and some spaces
 
         Args:
             keyword: Original keyword
@@ -70,25 +72,26 @@ class DataForSEOClient:
         Returns:
             Sanitized keyword safe for API
         """
-        # Replace problematic characters
-        # Keep only: alphanumeric, spaces, hyphens, apostrophes
         import re
 
         sanitized = keyword.strip()
 
-        # Remove parentheses, brackets, and their content
-        sanitized = re.sub(r'\([^)]*\)', '', sanitized)  # Remove (text)
-        sanitized = re.sub(r'\[[^\]]*\]', '', sanitized)  # Remove [text]
+        # Remove all DataForSEO-rejected special characters
+        # Replace with space for readability
+        sanitized = re.sub(r'[\"#%<>{}|^~\[\]`&?=+/]', ' ', sanitized)
 
-        # Remove special punctuation
-        sanitized = re.sub(r'[?;,!]+', ' ', sanitized)  # Replace with space
-        sanitized = re.sub(r'\.+$', '', sanitized)  # Remove trailing periods
+        # Remove parentheses and their content (often adds noise)
+        sanitized = re.sub(r'\([^)]*\)', '', sanitized)
 
-        # Normalize whitespace
+        # Remove other punctuation
+        sanitized = re.sub(r'[;,!:]+', ' ', sanitized)
+        sanitized = re.sub(r'\.+$', '', sanitized)  # Trailing periods
+
+        # Normalize multiple spaces to single space
         sanitized = re.sub(r'\s+', ' ', sanitized)
         sanitized = sanitized.strip()
 
-        return sanitized if sanitized else keyword  # Fallback to original
+        return sanitized if sanitized else keyword  # Fallback
     
     def get_keyword_metrics(
         self,
@@ -183,8 +186,6 @@ class DataForSEOClient:
         Returns:
             Dict mapping keyword -> KeywordMetrics
         """
-        url = f"{self.BASE_URL}/keywords_data/google_ads/search_volume/live"
-
         # Sanitize keywords and create mapping
         sanitized_to_original = {}
         sanitized_keywords = []
@@ -199,10 +200,43 @@ class DataForSEOClient:
                 f"(removed special characters)"
             )
 
+        # Fetch search volume from Clickstream Data (last 30 days)
+        volume_data = self._fetch_clickstream_volume(
+            sanitized_keywords,
+            location_code,
+            language_code,
+            is_first_batch
+        )
+
+        # Fetch keyword difficulty from DataForSEO Labs
+        difficulty_data = self._fetch_keyword_difficulty(
+            sanitized_keywords,
+            location_code,
+            is_first_batch
+        )
+
+        # Combine results
+        return self._combine_metrics(
+            volume_data,
+            difficulty_data,
+            sanitized_to_original
+        )
+
+    def _fetch_clickstream_volume(
+        self,
+        keywords: List[str],
+        location_code: int,
+        language_code: str,
+        is_first_batch: bool = False
+    ) -> dict:
+        """Fetch search volume from Clickstream Data endpoint."""
+        url = f"{self.BASE_URL}/keywords_data/clickstream_data/bulk_search_volume/live"
+
         payload = [{
-            "keywords": sanitized_keywords,
+            "keywords": keywords,
             "location_code": location_code,
-            "language_code": language_code
+            "language_code": language_code,
+            # Last 30 days filter (clickstream data is inherently recent)
         }]
         
         headers = {
@@ -250,7 +284,85 @@ class DataForSEOClient:
                 st.caption(f"🔧 No tasks in response!")
                 st.caption(f"🔧 Full response (first 500 chars): {response.text[:500]}")
 
-        return self._parse_response(data, sanitized_to_original)
+        return data
+
+    def _fetch_keyword_difficulty(
+        self,
+        keywords: List[str],
+        location_code: int,
+        is_first_batch: bool = False
+    ) -> dict:
+        """Fetch keyword difficulty from DataForSEO Labs endpoint."""
+        url = f"{self.BASE_URL}/dataforseo_labs/google/bulk_keyword_difficulty/live"
+
+        payload = [{
+            "keywords": keywords,
+            "location_code": location_code,
+        }]
+
+        headers = {
+            "Authorization": self.auth_header,
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+
+        if response.status_code == 429:
+            raise RateLimitError(service="DataForSEO", retry_after=60)
+
+        if response.status_code != 200:
+            raise APIError(
+                f"DataForSEO Labs API error: {response.text}",
+                service="DataForSEO",
+                status_code=response.status_code,
+                response=response.text
+            )
+
+        return response.json()
+
+    def _combine_metrics(
+        self,
+        volume_data: dict,
+        difficulty_data: dict,
+        sanitized_to_original: Dict[str, str]
+    ) -> Dict[str, KeywordMetrics]:
+        """Combine search volume and keyword difficulty data."""
+        results = {}
+
+        # Parse volume data
+        volume_map = {}
+        tasks = volume_data.get("tasks", []) or []
+        for task in tasks:
+            task_result = task.get("result", []) or []
+            for item in task_result or []:
+                kw = item.get("keyword", "")
+                if kw:
+                    volume_map[kw] = item.get("search_volume") or 0
+
+        # Parse difficulty data
+        difficulty_map = {}
+        tasks = difficulty_data.get("tasks", []) or []
+        for task in tasks:
+            task_result = task.get("result", []) or []
+            for item in task_result or []:
+                kw = item.get("keyword", "")
+                if kw:
+                    difficulty_map[kw] = item.get("keyword_difficulty") or 0.0
+
+        # Combine results and map back to original keywords
+        all_keywords = set(volume_map.keys()) | set(difficulty_map.keys())
+        for sanitized_kw in all_keywords:
+            original_kw = sanitized_to_original.get(sanitized_kw, sanitized_kw)
+
+            results[original_kw] = KeywordMetrics(
+                keyword=original_kw,
+                search_volume=volume_map.get(sanitized_kw, 0),
+                keyword_difficulty=difficulty_map.get(sanitized_kw, 0.0),
+                cpc=0.0,  # Not available from these endpoints
+                competition=0.0  # Not available from these endpoints
+            )
+
+        return results
     
     def _parse_response(
         self,
