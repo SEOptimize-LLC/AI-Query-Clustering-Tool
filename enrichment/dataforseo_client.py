@@ -57,6 +57,30 @@ class DataForSEOClient:
     def is_configured(self) -> bool:
         """Check if API credentials are configured."""
         return bool(self.login and self.password)
+
+    @staticmethod
+    def sanitize_keyword(keyword: str) -> str:
+        """
+        Sanitize keyword for DataForSEO API.
+        Removes special characters that cause API errors.
+
+        Args:
+            keyword: Original keyword
+
+        Returns:
+            Sanitized keyword safe for API
+        """
+        # Replace problematic characters
+        # Keep alphanumeric, spaces, hyphens, and apostrophes
+        import re
+        # Remove question marks, semicolons, commas, periods at end
+        sanitized = keyword.strip()
+        sanitized = re.sub(r'[?;,]+', ' ', sanitized)  # Replace with space
+        sanitized = re.sub(r'\.+$', '', sanitized)  # Remove trailing periods
+        sanitized = re.sub(r'\s+', ' ', sanitized)  # Normalize spaces
+        sanitized = sanitized.strip()
+
+        return sanitized if sanitized else keyword  # Fallback to original
     
     def get_keyword_metrics(
         self,
@@ -141,20 +165,34 @@ class DataForSEOClient:
     ) -> Dict[str, KeywordMetrics]:
         """
         Fetch metrics for a single batch of keywords (synchronous).
-        
+
         Args:
             keywords: Batch of keywords
             location_code: Location code
             language_code: Language code
             is_first_batch: Whether to show debug info
-        
+
         Returns:
             Dict mapping keyword -> KeywordMetrics
         """
         url = f"{self.BASE_URL}/keywords_data/google_ads/search_volume/live"
-        
+
+        # Sanitize keywords and create mapping
+        sanitized_to_original = {}
+        sanitized_keywords = []
+        for kw in keywords:
+            sanitized = self.sanitize_keyword(kw)
+            sanitized_keywords.append(sanitized)
+            sanitized_to_original[sanitized] = kw
+
+        if is_first_batch and len(sanitized_keywords) != len(keywords):
+            st.caption(
+                f"🔧 Sanitized {len(keywords)} keywords "
+                f"(removed special characters)"
+            )
+
         payload = [{
-            "keywords": keywords,
+            "keywords": sanitized_keywords,
             "location_code": location_code,
             "language_code": language_code
         }]
@@ -203,40 +241,49 @@ class DataForSEOClient:
             else:
                 st.caption(f"🔧 No tasks in response!")
                 st.caption(f"🔧 Full response (first 500 chars): {response.text[:500]}")
-        
-        return self._parse_response(data)
+
+        return self._parse_response(data, sanitized_to_original)
     
     def _parse_response(
         self,
-        data: dict
+        data: dict,
+        sanitized_to_original: Dict[str, str] = None
     ) -> Dict[str, KeywordMetrics]:
         """
         Parse DataForSEO API response.
-        
+
         Args:
             data: API response JSON
-        
+            sanitized_to_original: Mapping of sanitized -> original keywords
+
         Returns:
             Dict mapping keyword -> KeywordMetrics
         """
         results = {}
-        
+        sanitized_to_original = sanitized_to_original or {}
+
         tasks = data.get("tasks", []) or []
         for task in tasks:
             task_result = task.get("result", []) or []
             for item in task_result or []:
-                keyword = item.get("keyword", "")
-                if not keyword:
+                sanitized_keyword = item.get("keyword", "")
+                if not sanitized_keyword:
                     continue
-                
-                results[keyword] = KeywordMetrics(
-                    keyword=keyword,
+
+                # Map back to original keyword
+                original_keyword = sanitized_to_original.get(
+                    sanitized_keyword,
+                    sanitized_keyword
+                )
+
+                results[original_keyword] = KeywordMetrics(
+                    keyword=original_keyword,
                     search_volume=item.get("search_volume") or 0,
                     keyword_difficulty=item.get("keyword_difficulty") or 0.0,
                     cpc=item.get("cpc") or 0.0,
                     competition=item.get("competition") or 0.0
                 )
-        
+
         return results
     
     # Alias for backward compatibility
