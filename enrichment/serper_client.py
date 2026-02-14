@@ -86,35 +86,39 @@ class SerperClient:
     ) -> Dict[str, SERPResult]:
         """
         Perform batch SERP searches with rate limiting.
-        
+
         Args:
             queries: List of search queries
             location: Geographic location
             num_results: Results per query
             concurrency: Max concurrent requests
             progress_callback: Optional progress callback
-        
+
         Returns:
             Dict mapping query -> SERPResult
         """
         if not self.is_configured:
+            st.error("❌ Serper API key not configured!")
+            st.error("Add SERPER_API_KEY to .streamlit/secrets.toml")
             raise APIError(
                 "Serper API key not configured",
                 service="Serper"
             )
-        
+
         results = {}
+        failed_queries = []
         semaphore = asyncio.Semaphore(concurrency)
-        
+
         async def limited_search(query: str) -> tuple:
             async with semaphore:
                 try:
                     result = await self.search(query, location, num_results)
                     return query, result
                 except Exception as e:
-                    # Return empty result on error
+                    # Log error and return empty result
+                    failed_queries.append((query, str(e)))
                     return query, SERPResult(keyword=query)
-        
+
         async with aiohttp.ClientSession() as session:
             tasks = []
             for i, query in enumerate(queries):
@@ -122,17 +126,32 @@ class SerperClient:
                     self._fetch_serp(session, query, location, num_results)
                 )
                 tasks.append((query, task))
-            
+
             for i, (query, task) in enumerate(tasks):
                 try:
                     result = await task
                     results[query] = result
-                except Exception:
+                except Exception as e:
+                    # Log specific error
+                    failed_queries.append((query, str(e)))
                     results[query] = SERPResult(keyword=query)
-                
+
                 if progress_callback:
                     progress_callback(i + 1, len(queries))
-        
+
+        # Report failures
+        if failed_queries:
+            st.warning(
+                f"⚠️ SERP fetch failed for {len(failed_queries)}/{len(queries)} "
+                f"keywords. Validation may be incomplete."
+            )
+            # Show first few failures for debugging
+            if len(failed_queries) <= 3:
+                for kw, err in failed_queries:
+                    st.caption(f"  • '{kw}': {err}")
+        else:
+            st.success(f"✅ Fetched SERP data for {len(queries)} keywords")
+
         return results
     
     async def _fetch_serp(

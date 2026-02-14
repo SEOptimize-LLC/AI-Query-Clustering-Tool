@@ -16,8 +16,11 @@ Search intent indicators:
 
 Provide a 1-2 sentence summary describing:
 1. The main topic/theme
-2. The user intent (informational, transactional, navigational, commercial)
-3. Key distinguishing characteristics
+2. The user's GOAL or what action they want to take (not just "learn" or "find")
+3. The search intent (informational, transactional, navigational, commercial)
+4. Key distinguishing characteristics that make this cluster unique
+
+Focus on identifying the specific user need or action, not just the subject matter.
 
 Summary:"""
 
@@ -28,17 +31,29 @@ keyword research.
 
 CONTEXT:
 You have {n_clusters} keyword clusters to label. Each cluster needs:
-1. A short, descriptive label (2-5 words)
+1. A short, action-oriented label (2-5 words)
 2. Labels must be MUTUALLY EXCLUSIVE (no overlap in meaning)
 3. Labels must follow a CONSISTENT naming convention
+4. Labels must describe the USER'S GOAL, not just the topic
 
 CLUSTER SUMMARIES:
 {cluster_summaries}
 
-IMPORTANT RULES:
-- Use the same grammatical structure for all labels
-- Prefer noun phrases (e.g., "Product Comparison Guide" not "Comparing Products")
-- Include intent indicator when relevant (e.g., "How-To", "Review", "Buy")
+CRITICAL RULES FOR ACTION-ORIENTED LABELS:
+- START with an action verb that matches the search intent:
+  * INFORMATIONAL: "Learn", "Understand", "Discover", "Explore"
+  * COMMERCIAL: "Compare", "Choose", "Find Best", "Evaluate"
+  * TRANSACTIONAL: "Find", "Get", "Buy", "Hire", "Book"
+  * NAVIGATIONAL: Use brand/site name directly
+- Examples of GOOD labels:
+  * "Calculate Fireplace BTU Requirements" (informational)
+  * "Find Fireplace Repair Services" (transactional)
+  * "Compare Gas Fireplace Options" (commercial)
+  * "Learn About Fireplace Safety" (informational)
+- Examples of BAD labels (avoid these):
+  * "Fireplace BTU" (too generic, no action)
+  * "Fireplace Repair" (no user goal)
+  * "Gas Fireplaces" (just a topic, not actionable)
 - Make labels specific enough to distinguish clusters
 - Avoid generic labels like "Other" or "Miscellaneous"
 
@@ -128,16 +143,25 @@ Description:"""
 
 
 # Batch label generation (for efficiency)
-BATCH_LABEL_PROMPT = """Generate labels for multiple keyword clusters.
+BATCH_LABEL_PROMPT = """Generate ACTION-ORIENTED labels for multiple keyword clusters.
 
 Clusters to label:
 {clusters_data}
 
 Requirements:
 1. Each label should be 2-5 words
-2. Labels must be unique and non-overlapping
-3. Use consistent naming conventions
-4. Include intent indicator when helpful
+2. START with an action verb that matches search intent:
+   - Informational: Learn, Understand, Discover, Calculate
+   - Commercial: Compare, Choose, Find Best, Evaluate
+   - Transactional: Find, Get, Buy, Hire, Book
+3. Labels must describe the USER'S GOAL, not just the topic
+4. Labels must be unique and non-overlapping
+5. Use consistent naming conventions
+
+Examples:
+- "Calculate Fireplace BTU Requirements" (NOT "Fireplace BTU")
+- "Find Fireplace Repair Services" (NOT "Fireplace Repair")
+- "Compare Gas Fireplace Options" (NOT "Gas Fireplaces")
 
 Output as JSON array:
 [

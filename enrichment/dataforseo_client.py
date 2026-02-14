@@ -67,30 +67,35 @@ class DataForSEOClient:
     ) -> Dict[str, KeywordMetrics]:
         """
         Fetch search volume and difficulty for keywords (synchronous).
-        
+
         Args:
             keywords: List of keywords
             location_code: DataForSEO location code (default: US)
             language_code: Language code
             progress_callback: Optional callback(current, total)
-        
+
         Returns:
             Dict mapping keyword -> KeywordMetrics
         """
         if not self.is_configured:
+            st.error("❌ DataForSEO credentials not configured!")
+            st.error("Add DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD to .streamlit/secrets.toml")
             raise APIError(
                 "DataForSEO credentials not configured",
                 service="DataForSEO"
             )
-        
+
+        st.info(f"📡 Fetching metrics from DataForSEO for {len(keywords):,} keywords...")
+
         results = {}
         total_batches = (len(keywords) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
-        
+        failed_batches = 0
+
         for i, batch_start in enumerate(
             range(0, len(keywords), self.BATCH_SIZE)
         ):
             batch = keywords[batch_start:batch_start + self.BATCH_SIZE]
-            
+
             try:
                 batch_results = self._fetch_batch(
                     batch,
@@ -100,19 +105,31 @@ class DataForSEOClient:
                 )
                 results.update(batch_results)
             except Exception as e:
-                # Log error but continue with other batches
-                st.warning(f"Batch {i+1} failed: {e}")
-            
+                # Log detailed error for troubleshooting
+                failed_batches += 1
+                st.error(f"❌ Batch {i+1}/{total_batches} failed: {str(e)}")
+                st.caption(f"Error type: {type(e).__name__}")
+
+                # Show rate limit guidance
+                if "429" in str(e) or "rate" in str(e).lower():
+                    st.warning("⏱️ Rate limit hit. Consider reducing batch size or adding delays.")
+
             if progress_callback:
                 progress_callback(
                     min(batch_start + self.BATCH_SIZE, len(keywords)),
                     len(keywords)
                 )
-            
+
             # Small delay between batches to avoid rate limits
             if i < total_batches - 1:
                 time.sleep(0.5)
-        
+
+        # Summary
+        if failed_batches > 0:
+            st.warning(f"⚠️ {failed_batches}/{total_batches} batches failed. Got metrics for {len(results):,} keywords.")
+        else:
+            st.success(f"✅ Successfully fetched metrics for {len(results):,} keywords!")
+
         return results
     
     def _fetch_batch(

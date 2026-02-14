@@ -495,17 +495,28 @@ def render_enrichment_section(config: dict):
         )
         
         if st.button("📊 Fetch Metrics from DataForSEO", type="secondary"):
+            st.write("🔧 DEBUG: Button clicked!")  # Debug
+            st.write(f"🔧 DEBUG: Keywords count: {len(keywords)}")  # Debug
+
             st.session_state.fetching_metrics = True
             progress_bar = st.progress(0, text="Starting...")
-            
+
             try:
+                st.write("🔧 DEBUG: About to call fetch_metrics_sync")  # Debug
                 enriched = fetch_metrics_sync(keywords, config, progress_bar)
+                st.write(f"🔧 DEBUG: Got {len(enriched)} enriched keywords")  # Debug
+
                 st.session_state.keywords_enriched = enriched
                 st.session_state.metrics_fetched = True
                 st.session_state.fetching_metrics = False
+
+                st.write("🔧 DEBUG: About to rerun")  # Debug
                 st.rerun()
             except Exception as e:
-                st.error(f"Error fetching metrics: {e}")
+                st.error(f"❌ Error fetching metrics: {e}")
+                st.error(f"🔧 DEBUG: Exception type: {type(e).__name__}")
+                import traceback
+                st.code(traceback.format_exc())
                 st.session_state.fetching_metrics = False
         
         # Allow skipping
