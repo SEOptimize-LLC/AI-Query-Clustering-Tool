@@ -212,6 +212,7 @@ class DataForSEOClient:
         difficulty_data = self._fetch_keyword_difficulty(
             sanitized_keywords,
             location_code,
+            language_code,
             is_first_batch
         )
 
@@ -298,6 +299,7 @@ class DataForSEOClient:
         self,
         keywords: List[str],
         location_code: int,
+        language_code: str,
         is_first_batch: bool = False
     ) -> dict:
         """Fetch keyword difficulty from DataForSEO Labs endpoint."""
@@ -306,6 +308,7 @@ class DataForSEOClient:
         payload = [{
             "keywords": keywords,
             "location_code": location_code,
+            "language_code": language_code,
         }]
 
         headers = {
