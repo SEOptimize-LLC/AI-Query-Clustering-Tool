@@ -279,7 +279,15 @@ class DataForSEOClient:
                 if result:
                     first = result[0]
                     st.caption(f"🔧 First result keys: {list(first.keys())}")
-                    st.caption(f"🔧 First kw: {first.get('keyword')} vol: {first.get('search_volume')}")
+
+                    # Clickstream data has nested 'items' structure
+                    items = first.get('items', [])
+                    if items:
+                        first_item = items[0]
+                        st.caption(f"🔧 First item keys: {list(first_item.keys())}")
+                        st.caption(f"🔧 First kw: {first_item.get('keyword')} vol: {first_item.get('search_volume')}")
+                    else:
+                        st.caption(f"🔧 No items in first result!")
             else:
                 st.caption(f"🔧 No tasks in response!")
                 st.caption(f"🔧 Full response (first 500 chars): {response.text[:500]}")
@@ -329,25 +337,38 @@ class DataForSEOClient:
         """Combine search volume and keyword difficulty data."""
         results = {}
 
-        # Parse volume data
+        # Parse volume data (Clickstream has nested 'items' structure)
         volume_map = {}
         tasks = volume_data.get("tasks", []) or []
         for task in tasks:
             task_result = task.get("result", []) or []
-            for item in task_result or []:
-                kw = item.get("keyword", "")
-                if kw:
-                    volume_map[kw] = item.get("search_volume") or 0
+            for result_item in task_result or []:
+                # Clickstream data nests keywords in 'items' array
+                items = result_item.get("items", [])
+                for item in items:
+                    kw = item.get("keyword", "")
+                    if kw:
+                        volume_map[kw] = item.get("search_volume") or 0
 
-        # Parse difficulty data
+        # Parse difficulty data (Labs also has nested structure)
         difficulty_map = {}
         tasks = difficulty_data.get("tasks", []) or []
         for task in tasks:
             task_result = task.get("result", []) or []
-            for item in task_result or []:
-                kw = item.get("keyword", "")
-                if kw:
-                    difficulty_map[kw] = item.get("keyword_difficulty") or 0.0
+            for result_item in task_result or []:
+                # Labs data may also nest in 'items'
+                items = result_item.get("items", [])
+                if items:
+                    # Nested structure
+                    for item in items:
+                        kw = item.get("keyword", "")
+                        if kw:
+                            difficulty_map[kw] = item.get("keyword_difficulty") or 0.0
+                else:
+                    # Flat structure (fallback)
+                    kw = result_item.get("keyword", "")
+                    if kw:
+                        difficulty_map[kw] = result_item.get("keyword_difficulty") or 0.0
 
         # Combine results and map back to original keywords
         all_keywords = set(volume_map.keys()) | set(difficulty_map.keys())
